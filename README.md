@@ -6,7 +6,8 @@ A fan-made mortar and artillery helper for WARDOGS that **reads the firing solut
 
 ## What it does
 
-- Click where your gun is, then click the target. The page shows and speaks the direction and elevation, for example "Turn to 54. Set 700."
+- Place your gun once. Then click the map to drop a **ping**, and click a ping (on the map or in the list) to fire on it. The page shows and speaks the direction and elevation, for example "Ping 2. Turn to 54. Set 700."
+- The ping list shows the numbers for every ping at a glance, so you can pick the closest or the one in range.
 - Supports the L81 mortar and the SPH-2 on Bakurani, Ozeti and Zestafona.
 - Warns when a target is too close or out of range.
 - Saves targets you use often (stored only in your browser).
@@ -14,7 +15,7 @@ A fan-made mortar and artillery helper for WARDOGS that **reads the firing solut
 
 ## Squad rooms
 
-Press **Start a squad room** and send the invite link to your squad. When anyone in the room marks a target, everyone's page picks it up and speaks their own numbers, because each person places their own gun.
+Press **Start a squad room** and send the invite link to your squad. When anyone in the room drops a ping, it appears on everyone's map and the page announces it ("Ping 3 from Spotter, 420 meters"). Each gunner picks which ping to fire on and hears their own numbers, because each person places their own gun. Pings fade after five minutes, and **Clear mine** removes yours for everyone.
 
 Rooms run over a free public message broker (HiveMQ's public broker). There is no account and nothing is stored, but anyone who knows a room code can see the map points sent in that room, so don't put anything private in your call sign.
 

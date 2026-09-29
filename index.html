@@ -64,6 +64,15 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
 .squad .meta { font-size: 13px; color: var(--muted); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: middle; }
 .dot.on { background: var(--ok); } .dot.err { background: var(--bad); }
+.pings { display: grid; gap: 8px; }
+.pings ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.pings li { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: #141813; }
+.pings li.active { border-color: var(--amber); }
+.pings .tag { font-family: var(--f-num); font-weight: 700; font-size: 18px; color: var(--squad); min-width: 2.2em; }
+.pings .tag.mine { color: var(--amber); }
+.pings .info { min-width: 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pings .info b { color: var(--ink); font-weight: 600; }
+.pings .empty { display: block; border: 0; background: none; padding: 0; color: var(--muted); font-size: 13px; }
 .saved ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .saved li { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 6px; align-items: center; }
 .saved .empty { color: var(--muted); font-size: 13px; }
@@ -86,12 +95,12 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     <div class="maptools">
       <div class="seg" role="group" aria-label="What a click places">
         <button id="modeGun" class="gunbtn" aria-pressed="false">Place gun</button>
-        <button id="modeTgt" aria-pressed="true">Place target</button>
+        <button id="modeTgt" aria-pressed="true">Ping</button>
       </div>
       <button id="lockBtn" aria-pressed="false">Gun unlocked</button>
       <button id="centerBtn">Center on gun</button>
     </div>
-    <div class="hint" id="hint">Drag to move the map, scroll or pinch to zoom. Click to place.</div>
+    <div class="hint" id="hint">Click the map to ping. Click a ping to fire on it. Drag to move, scroll or pinch to zoom.</div>
   </div>
 
   <aside class="side">
@@ -113,6 +122,11 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       <div class="status idle" id="status">Place your gun, then a target.</div>
       <div class="from" id="from"></div>
     </div>
+
+    <section class="pings" aria-label="Pings">
+      <div class="row"><span class="lab grow" style="margin:0">Pings</span><button id="clearPings">Clear mine</button></div>
+      <ul id="pingList"></ul>
+    </section>
 
     <div class="stack">
       <button class="big" id="voiceBtn" aria-pressed="false">Turn voice on</button>
@@ -186,6 +200,7 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     mode: 'gun', locked: false,
     gun: null, tgt: null, tgtFrom: null,
     voice: false,
+    pings: [], activePing: null, pingN: 0,
     sayRange: store.get('sayRange', false),
     view: { scale: 20, cx: 0, cy: 0 }, // screen px per game unit; game point at screen centre
   };
@@ -241,10 +256,11 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     }
     return null;
   }
-  function solve() {
-    if (!st.gun || !st.tgt) return null;
+  function solve() { return solveFor(st.tgt); }
+  function solveFor(p) {
+    if (!st.gun || !p) return null;
     const w = WEAPONS[st.weapon];
-    const dx = (st.tgt[0] - st.gun[0]) * 100, dy = (st.tgt[1] - st.gun[1]) * 100;
+    const dx = (p[0] - st.gun[0]) * 100, dy = (p[1] - st.gun[1]) * 100;
     const dist = Math.hypot(dx, dy);
     const az = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
     if (dist < w.min) return { status: 'close', dist, az };
@@ -310,6 +326,21 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       }
     }
   }
+  function drawPings() {
+    ctx.font = '700 13px "Saira Condensed", sans-serif';
+    for (const pg of visiblePings()) {
+      const [sx, sy] = toScreen(pg.x, pg.y);
+      const col = pg.mine ? '#f0b43c' : '#c99cf0';
+      const active = st.activePing === pg.pid;
+      ctx.lineWidth = active ? 3 : 2; ctx.strokeStyle = col; ctx.fillStyle = 'rgba(12,14,11,.75)';
+      ctx.beginPath(); ctx.moveTo(sx, sy - 10); ctx.lineTo(sx + 10, sy); ctx.lineTo(sx, sy + 10); ctx.lineTo(sx - 10, sy); ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.fillStyle = col; ctx.beginPath(); ctx.arc(sx, sy, 2.5, 0, Math.PI * 2); ctx.fill();
+      const label = 'P' + pg.n + (pg.mine ? '' : ' ' + pg.by);
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.8)'; ctx.strokeText(label, sx + 13, sy - 8);
+      ctx.fillText(label, sx + 13, sy - 8);
+    }
+  }
   function draw() {
     if (!W) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -328,6 +359,7 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       ctx.lineWidth = 2; ctx.setLineDash([8, 6]);
       ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); ctx.setLineDash([]);
     }
+    drawPings();
     if (st.gun) marker(st.gun, '#6fb7e8', 'gun');
     if (st.tgt) marker(st.tgt, st.tgtFrom ? '#c99cf0' : (r && r.status === 'ok' ? '#f0b43c' : '#ef6b5a'), 'tgt');
   }
@@ -344,11 +376,12 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     $('from').textContent = st.tgtFrom ? 'Squad target from ' + st.tgtFrom : '';
     const w = WEAPONS[st.weapon];
     if (!st.gun) { s.className = 'status idle'; s.textContent = st.tgt ? 'Target received. Place your gun to get numbers.' : 'Place your gun first.'; }
-    else if (!st.tgt) { s.className = 'status idle'; s.textContent = 'Now click the target.'; }
+    else if (!st.tgt) { s.className = 'status idle'; s.textContent = 'Click the map to ping, then click a ping to fire on it.'; }
     else if (r.status === 'ok') { s.className = 'status ok'; s.textContent = 'In range. Fire when ready.'; }
     else if (r.status === 'far') { s.className = 'status bad'; s.textContent = 'Too far. ' + w.name + ' reaches ' + w.max + ' m.'; }
     else { s.className = 'status bad'; s.textContent = 'Too close. ' + w.name + ' needs at least ' + w.min + ' m.'; }
     draw();
+    renderPings();
     if (speak) say((prefix || '') + phrase());
   }
   function phrase() {
@@ -418,7 +451,7 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
   }
   function loadMapState() {
     st.gun = store.get('gun.' + st.map, null);
-    st.tgt = null; st.tgtFrom = null;
+    st.tgt = null; st.tgtFrom = null; st.activePing = null;
     setLocked(!!st.gun);
     setMode(st.gun ? 'tgt' : 'gun');
     const c = st.gun || MAPS[st.map].start;
@@ -462,11 +495,75 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     store.set('targets.' + st.map, l); renderSaved();
   };
 
-  function setTarget(p, from, broadcast) {
-    st.tgt = p; st.tgtFrom = from || null;
+  function setTarget(p, from, broadcast, pingId) {
+    st.tgt = p; st.tgtFrom = from || null; st.activePing = pingId || null;
     update(true, from ? 'Squad target from ' + from + '. ' : '');
     if (broadcast && !from) squad.sendTarget(p);
   }
+
+  // ---------- pings: quick shared marks; click one to fire on it ----------
+  const PING_TTL = 5 * 60 * 1000, PING_MAX = 12;
+  function visiblePings() {
+    const now = Date.now();
+    return st.pings.filter((pg) => pg.map === st.map && now - pg.t < PING_TTL);
+  }
+  function addPing(pg) {
+    if (st.pings.some((q) => q.pid === pg.pid)) return null;
+    pg.n = ++st.pingN; pg.t = Date.now();
+    st.pings.push(pg);
+    if (st.pings.length > PING_MAX) st.pings.shift();
+    renderPings(); draw();
+    return pg;
+  }
+  function removePing(pid) {
+    st.pings = st.pings.filter((q) => q.pid !== pid);
+    if (st.activePing === pid) st.activePing = null;
+    renderPings(); draw();
+  }
+  function fireOnPing(pg) {
+    st.tgt = [pg.x, pg.y]; st.tgtFrom = null; st.activePing = pg.pid;
+    update(true, 'Ping ' + pg.n + '. ');
+  }
+  function pingAt(sx, sy) {
+    let best = null, bd = 18;
+    for (const pg of visiblePings()) {
+      const [px, py] = toScreen(pg.x, pg.y);
+      const d = Math.hypot(px - sx, py - sy);
+      if (d < bd) { bd = d; best = pg; }
+    }
+    return best;
+  }
+  function pingSummary(pg) {
+    const r = solveFor([pg.x, pg.y]);
+    if (!r) return 'place your gun for numbers';
+    if (r.status === 'ok') return '<b>' + fmtAz(r.az) + '°  ' + r.mils + ' mil</b> · ' + Math.round(r.dist) + ' m';
+    return (r.status === 'far' ? 'out of range' : 'too close') + ' · ' + Math.round(r.dist) + ' m';
+  }
+  function renderPings() {
+    const ul = $('pingList'); ul.innerHTML = '';
+    const list = visiblePings().slice().reverse();
+    if (!list.length) {
+      const li = document.createElement('li'); li.className = 'empty';
+      li.textContent = 'Click the map to drop a ping. Squad pings show up here too.';
+      ul.appendChild(li); return;
+    }
+    list.forEach((pg) => {
+      const li = document.createElement('li');
+      if (st.activePing === pg.pid) li.className = 'active';
+      const tag = document.createElement('span'); tag.className = 'tag' + (pg.mine ? ' mine' : ''); tag.textContent = 'P' + pg.n;
+      const info = document.createElement('span'); info.className = 'info';
+      const who = document.createElement('span'); who.textContent = (pg.mine ? 'You' : pg.by) + ' · ';
+      const nums = document.createElement('span'); nums.innerHTML = pingSummary(pg);
+      info.append(who, nums);
+      const btn = document.createElement('button'); btn.textContent = st.activePing === pg.pid ? 'Firing' : 'Fire';
+      btn.onclick = () => fireOnPing(pg);
+      li.append(tag, info, btn); ul.appendChild(li);
+    });
+  }
+  $('clearPings').onclick = () => {
+    st.pings.filter((q) => q.mine).forEach((q) => { squad.sendUnping(q.pid); removePing(q.pid); });
+  };
+  setInterval(() => { renderPings(); draw(); }, 15000);
 
   // ---------- pointer: pan, pinch, wheel, click ----------
   const pts = new Map();
@@ -525,7 +622,11 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       update(false);
       say('Gun placed.');
     } else {
-      setTarget(p, null, true);
+      const hit = pingAt(sx, sy);
+      if (hit) { fireOnPing(hit); return; }
+      const pg = { pid: squad.id + '-' + Date.now().toString(36), map: st.map, x: p[0], y: p[1], by: 'You', mine: true };
+      addPing(pg);
+      squad.sendPing(pg);
     }
   }
 
@@ -563,11 +664,23 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       if (!msg || msg.v !== 1 || typeof msg.id !== 'string' || msg.id === myId) return;
       seen.set(msg.id.slice(0, 12), Date.now());
       if (topic.endsWith('/hello')) { showMembers(); return; }
-      if (!topic.endsWith('/target')) return;
+      if (topic.endsWith('/unping')) { if (typeof msg.pid === 'string') removePing(msg.pid.slice(0, 40)); return; }
+      const isPing = topic.endsWith('/ping');
+      if (!isPing && !topic.endsWith('/target')) return;
       const m = MAPS[msg.map];
       const x = Number(msg.x), y = Number(msg.y);
       if (!m || !Number.isFinite(x) || !Number.isFinite(y) || !inMap([x, y], m)) return;
       const from = cleanName(msg.by) || 'Squadmate';
+      if (isPing) {
+        if (typeof msg.pid !== 'string') return;
+        const pg = addPing({ pid: msg.pid.slice(0, 40), map: msg.map, x, y, by: from, mine: false });
+        showMembers();
+        if (pg && msg.map === st.map) {
+          const r = solveFor([x, y]);
+          say('Ping ' + pg.n + ' from ' + from + (r ? ', ' + Math.round(r.dist / 10) * 10 + ' meters.' : '.'));
+        }
+        return;
+      }
       if (msg.map !== st.map) {
         $('from').textContent = from + ' marked a target on ' + m.name + '. Switch map to use it.';
         return;
@@ -588,7 +701,7 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       net('', 'Connecting…');
       client = window.mqtt.connect(BROKER, { clientId: 'wfc_' + myId + '_' + Math.random().toString(36).slice(2, 6), clean: true, reconnectPeriod: 3000, connectTimeout: 10000 });
       client.on('connect', () => {
-        client.subscribe([TOPIC_ROOT + room + '/target', TOPIC_ROOT + room + '/hello']);
+        client.subscribe(['target', 'hello', 'ping', 'unping'].map((k) => TOPIC_ROOT + room + '/' + k));
         publish('hello', { by: callsign() });
         showMembers();
       });
@@ -625,6 +738,9 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     };
     return {
       join,
+      id: myId,
+      sendPing(pg) { if ($('shareMine').checked) publish('ping', { pid: pg.pid, map: pg.map, x: +pg.x.toFixed(3), y: +pg.y.toFixed(3), by: callsign() }); },
+      sendUnping(pid) { publish('unping', { pid }); },
       sendTarget(p) { if ($('shareMine').checked) publish('target', { map: st.map, x: +p[0].toFixed(3), y: +p[1].toFixed(3), by: callsign() }); },
       initialRoom() { return cleanCode(new URLSearchParams(location.search).get('room')) || cleanCode(store.get('room', '')); },
     };
