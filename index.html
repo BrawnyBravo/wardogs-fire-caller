@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>WARDOGS Fire Caller</title>
+<meta name="description" content="Click your mortar and a target on the WARDOGS map and hear the direction and elevation read aloud. Squad rooms share targets live.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;700&family=Barlow:wght@400;500;600&display=swap">
+<style>
+/* Layout: full-bleed map with a fire-control panel docked right (desktop) or below (phone). Single dark look on purpose: it sits beside a game. */
+:root {
+  color-scheme: dark;
+  --ground: #121511;
+  --panel: #1a1e19;
+  --line: #2f362d;
+  --ink: #e6e9e1;
+  --muted: #98a193;
+  --amber: #f0b43c;
+  --gun: #6fb7e8;
+  --squad: #c99cf0;
+  --bad: #ef6b5a;
+  --ok: #8fce72;
+  --f-num: "Saira Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --f-body: "Barlow", "Segoe UI", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--ground); color: var(--ink); font-family: var(--f-body); font-size: 15px; overflow: hidden; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+.app { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 350px; }
+.mapwrap { position: relative; min-width: 0; min-height: 0; background: #0c0e0b; }
+canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+.maptools { position: absolute; left: 12px; top: 12px; right: 12px; display: flex; gap: 6px; flex-wrap: wrap; }
+.maptools button { background: rgba(18,21,17,.88); }
+.hint { position: absolute; left: 12px; bottom: 12px; right: 12px; color: var(--muted); font-size: 13px; pointer-events: none; text-shadow: 0 1px 2px #000; }
+.side { background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+h1 { font-family: var(--f-num); font-weight: 700; font-size: 20px; letter-spacing: .08em; text-transform: uppercase; margin: 0; color: var(--amber); }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.lab { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); display: block; margin-bottom: 6px; }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; flex: 1; }
+.seg button + button { border-left: 1px solid var(--line); }
+button { white-space: nowrap; font: 600 14px var(--f-body); color: var(--ink); background: #232822; border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; cursor: pointer; }
+button:hover { background: #2b3129; }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+button[aria-pressed="true"] { background: var(--amber); color: #1b1606; }
+button.gunbtn[aria-pressed="true"] { background: var(--gun); color: #06131c; }
+input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink); background: #141813; border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+.readout { border: 1px solid var(--line); border-radius: 8px; padding: 14px; background: #141813; display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+.readout .k { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+.readout .v { font-family: var(--f-num); font-weight: 700; font-size: 52px; line-height: 1; font-variant-numeric: tabular-nums; }
+.readout .v small { font-size: 20px; color: var(--muted); font-weight: 500; margin-left: 2px; }
+.readout .wide { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.status { grid-column: 1 / -1; font-weight: 600; font-size: 14px; padding: 6px 10px; border-radius: 5px; background: #20251f; }
+.status.ok { color: var(--ok); } .status.bad { color: var(--bad); } .status.idle { color: var(--muted); }
+.from { grid-column: 1 / -1; font-size: 13px; color: var(--squad); min-height: 1em; }
+.stack { display: grid; gap: 8px; }
+.big { font-size: 16px; padding: 12px; }
+.check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+.squad { border: 1px solid var(--line); border-radius: 8px; padding: 12px; display: grid; gap: 10px; }
+.squad .code { font-family: var(--f-num); font-size: 28px; font-weight: 700; letter-spacing: .12em; color: var(--squad); }
+.squad .meta { font-size: 13px; color: var(--muted); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: middle; }
+.dot.on { background: var(--ok); } .dot.err { background: var(--bad); }
+.saved ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.saved li { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 6px; align-items: center; }
+.saved .empty { color: var(--muted); font-size: 13px; }
+.grow { flex: 1; }
+.foot { color: var(--muted); font-size: 12px; line-height: 1.5; margin-top: auto; }
+.foot a { color: var(--muted); }
+@media (max-width: 760px) {
+  body { overflow: auto; }
+  .app { grid-template-columns: 1fr; grid-template-rows: 58vh auto; height: auto; min-height: 100%; }
+  .side { border-left: 0; border-top: 1px solid var(--line); overflow: visible; }
+  .readout .v { font-size: 44px; }
+}
+@media (prefers-reduced-motion: no-preference) { button { transition: background .12s; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="mapwrap">
+    <canvas id="map" aria-label="Map. Click to place your gun or the target."></canvas>
+    <div class="maptools">
+      <div class="seg" role="group" aria-label="What a click places">
+        <button id="modeGun" class="gunbtn" aria-pressed="false">Place gun</button>
+        <button id="modeTgt" aria-pressed="true">Place target</button>
+      </div>
+      <button id="lockBtn" aria-pressed="false">Gun unlocked</button>
+      <button id="centerBtn">Center on gun</button>
+    </div>
+    <div class="hint" id="hint">Drag to move the map, scroll or pinch to zoom. Click to place.</div>
+  </div>
+
+  <aside class="side">
+    <h1>Fire Caller</h1>
+
+    <div>
+      <span class="lab">Map</span>
+      <div class="seg" id="mapSel" role="group" aria-label="Map"></div>
+    </div>
+    <div>
+      <span class="lab">Weapon</span>
+      <div class="seg" id="wpnSel" role="group" aria-label="Weapon"></div>
+    </div>
+
+    <div class="readout" aria-live="polite">
+      <div><div class="k">Turn to</div><div class="v" id="az">---<small>&deg;</small></div></div>
+      <div><div class="k">Set</div><div class="v" id="mil">---<small>mil</small></div></div>
+      <div class="wide"><span id="dist">Range —</span><span id="exact"></span></div>
+      <div class="status idle" id="status">Place your gun, then a target.</div>
+      <div class="from" id="from"></div>
+    </div>
+
+    <div class="stack">
+      <button class="big" id="voiceBtn" aria-pressed="false">Turn voice on</button>
+      <button id="sayBtn">Say it again</button>
+      <label class="check"><input type="checkbox" id="sayRange"> Also say the range</label>
+    </div>
+
+    <section class="squad" aria-label="Squad">
+      <span class="lab" style="margin:0">Squad</span>
+      <div id="squadOff" class="stack">
+        <div class="row">
+          <label class="lab" for="callsign" style="margin:0">Call sign</label>
+          <input type="text" id="callsign" class="grow" maxlength="16" placeholder="e.g. Spotter">
+        </div>
+        <button id="createBtn">Start a squad room</button>
+        <div class="row">
+          <input type="text" id="joinCode" class="grow" maxlength="8" placeholder="Room code" aria-label="Room code" autocapitalize="characters">
+          <button id="joinBtn">Join</button>
+        </div>
+      </div>
+      <div id="squadOn" class="stack" hidden>
+        <div class="row"><span class="code" id="roomCode"></span><span class="grow"></span><button id="leaveBtn">Leave</button></div>
+        <div class="meta"><span class="dot" id="netDot"></span><span id="netText">Connecting…</span></div>
+        <div class="row"><button id="inviteBtn" class="grow">Copy invite link</button></div>
+        <label class="check"><input type="checkbox" id="shareMine" checked> Send my targets to the squad</label>
+        <div class="meta">Anyone with the code sees targets in this room. Each person places their own gun, so everyone hears their own numbers.</div>
+      </div>
+    </section>
+
+    <div class="saved">
+      <span class="lab">Saved targets on this map</span>
+      <ul id="savedList"></ul>
+      <div class="row" style="margin-top:8px"><button id="saveBtn">Save current target</button></div>
+    </div>
+
+    <div class="foot">
+      Maps and firing tables come from the free, open-source <a href="https://github.com/djzet/wardogs-calc" target="_blank" rel="noopener">WARDOGS calculator by djzet</a>. Fan-made and unofficial. This page never touches the game; it only reads out what you and your squad place. It does not correct for hills, so fire one ranging round when the target sits much higher or lower than you.
+      <br><a href="https://github.com/BrawnyBravo/wardogs-fire-caller" target="_blank" rel="noopener">Source code</a>
+    </div>
+  </aside>
+</div>
+
+<script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>
+(function () {
+  'use strict';
+  // Game units: 1 unit = 100 m. x grows east, y grows north.
+  // Map bounds and firing tables from djzet/wardogs-calc (MIT).
+  const MAPS = {
+    bakurani:  { name: 'Bakurani',  w: 163.81, h: 163.83, start: [80.6, 70.9] },
+    ozeti:     { name: 'Ozeti',     w: 163.81, h: 163.83, start: [100.3, 63.4] },
+    zestafona: { name: 'Zestafona', w: 163.81, h: 163.83, start: [70.5, 103.1] },
+  };
+  const WEAPONS = {
+    mortar: { name: 'L81 Mortar', min: 132, max: 684, step: 50, table: [[150,684],[200,661],[250,637],[300,609],[350,578],[400,545],[450,510],[500,470],[550,430],[600,385],[650,340],[700,290],[750,240],[800,187],[850,132]] },
+    artillery: { name: 'SPH-2', min: 786, max: 2679, step: 10, table: [[600,2679],[650,2669],[700,2644],[750,2602],[800,2545],[850,2473],[900,2386],[950,2284],[1000,2168],[1050,2037],[1100,1892],[1150,1733],[1200,1560],[1250,1374],[1300,1175],[1350,963],[1390,786]] },
+  };
+  const TILE_URL = (m, z, x, y) => `https://djzet.github.io/wardogs-maps/maps/${m}/tiles/zoom_${z}/${x}_${y}.webp`;
+  const MAX_Z = 7, BASE_Z = 2;
+  const BROKER = 'wss://broker.hivemq.com:8884/mqtt';
+  const TOPIC_ROOT = 'wardogs-fire-caller/v1/';
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem('wfc.' + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem('wfc.' + k, JSON.stringify(v)); } catch (e) {} },
+  };
+
+  const st = {
+    map: store.get('map', 'bakurani'),
+    weapon: store.get('weapon', 'mortar'),
+    mode: 'gun', locked: false,
+    gun: null, tgt: null, tgtFrom: null,
+    voice: false,
+    sayRange: store.get('sayRange', false),
+    view: { scale: 20, cx: 0, cy: 0 }, // screen px per game unit; game point at screen centre
+  };
+  if (!MAPS[st.map]) st.map = 'bakurani';
+  if (!WEAPONS[st.weapon]) st.weapon = 'mortar';
+
+  const $ = (id) => document.getElementById(id);
+  const cv = $('map'), ctx = cv.getContext('2d');
+  let dpr = 1, W = 0, H = 0;
+
+  // ---------- map tiles ----------
+  const tiles = new Map();
+  function tile(z, x, y) {
+    const key = st.map + '/' + z + '/' + x + '/' + y;
+    let t = tiles.get(key);
+    if (t) { tiles.delete(key); tiles.set(key, t); return t; }
+    t = { im: new Image(), ok: false };
+    t.im.onload = () => { t.ok = true; scheduleDraw(); };
+    t.im.src = TILE_URL(st.map, z, x, y);
+    tiles.set(key, t);
+    if (tiles.size > 600) tiles.delete(tiles.keys().next().value);
+    return t;
+  }
+  function drawTileLayer(z, onlyVisible) {
+    const m = MAPS[st.map], n = 1 << z;
+    const tw = m.w / n, th = m.h / n;
+    const [x0, y0] = toScreen(0, m.h);
+    const sw = tw * st.view.scale, sh = th * st.view.scale;
+    const ix0 = Math.max(0, Math.floor(-x0 / sw)), ix1 = Math.min(n - 1, Math.floor((W - x0) / sw));
+    const iy0 = Math.max(0, Math.floor(-y0 / sh)), iy1 = Math.min(n - 1, Math.floor((H - y0) / sh));
+    for (let ty = iy0; ty <= iy1; ty++) for (let tx = ix0; tx <= ix1; tx++) {
+      const t = tile(z, tx, ty);
+      if (t.ok) ctx.drawImage(t.im, x0 + tx * sw, y0 + ty * sh, sw + .5, sh + .5);
+    }
+  }
+  function drawMap() {
+    const m = MAPS[st.map];
+    const mapPx = m.w * st.view.scale * dpr;
+    const z = Math.max(0, Math.min(MAX_Z, Math.ceil(Math.log2(mapPx / 256) - 0.3)));
+    drawTileLayer(Math.min(BASE_Z, z));
+    if (z > BASE_Z) drawTileLayer(z);
+  }
+
+  // ---------- geometry ----------
+  function toScreen(x, y) { const v = st.view; return [(x - v.cx) * v.scale + W / 2, (v.cy - y) * v.scale + H / 2]; }
+  function toGame(sx, sy) { const v = st.view; return [(sx - W / 2) / v.scale + v.cx, v.cy - (sy - H / 2) / v.scale]; }
+  function milsFor(d, w) {
+    const t = w.table;
+    if (d > t[0][1] || d < t[t.length - 1][1]) return null;
+    for (let i = 0; i < t.length - 1; i++) {
+      const [m1, d1] = t[i], [m2, d2] = t[i + 1];
+      if (d <= d1 && d >= d2) return m1 + (d1 - d) / (d1 - d2) * (m2 - m1);
+    }
+    return null;
+  }
+  function solve() {
+    if (!st.gun || !st.tgt) return null;
+    const w = WEAPONS[st.weapon];
+    const dx = (st.tgt[0] - st.gun[0]) * 100, dy = (st.tgt[1] - st.gun[1]) * 100;
+    const dist = Math.hypot(dx, dy);
+    const az = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+    if (dist < w.min) return { status: 'close', dist, az };
+    if (dist > w.max) return { status: 'far', dist, az };
+    const exact = milsFor(dist, w);
+    if (exact == null) return { status: 'far', dist, az };
+    return { status: 'ok', dist, az, exact, mils: Math.round(exact / w.step) * w.step };
+  }
+
+  // ---------- drawing ----------
+  let drawQueued = false;
+  function scheduleDraw() { if (!drawQueued) { drawQueued = true; requestAnimationFrame(() => { drawQueued = false; draw(); }); } }
+  function resize() {
+    const r = cv.getBoundingClientRect();
+    dpr = window.devicePixelRatio || 1;
+    W = r.width; H = r.height;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    draw();
+  }
+  function drawGrid() {
+    const m = MAPS[st.map], s = st.view.scale;
+    const step = s * 10 > 60 ? 10 : 50;
+    ctx.lineWidth = 1;
+    ctx.font = '12px Barlow, sans-serif';
+    ctx.fillStyle = 'rgba(230,233,225,.55)';
+    for (let g = 0; g <= m.w; g += step) {
+      const [sx] = toScreen(g, 0);
+      if (sx < -1 || sx > W + 1) continue;
+      ctx.strokeStyle = g % 50 === 0 ? 'rgba(240,180,60,.28)' : 'rgba(230,233,225,.12)';
+      ctx.beginPath(); ctx.moveTo(sx + .5, 0); ctx.lineTo(sx + .5, H); ctx.stroke();
+      ctx.fillText((g / 10) + ' km', sx + 4, H - 30);
+    }
+    for (let g = 0; g <= m.h; g += step) {
+      const [, sy] = toScreen(0, g);
+      if (sy < -1 || sy > H + 1) continue;
+      ctx.strokeStyle = g % 50 === 0 ? 'rgba(240,180,60,.28)' : 'rgba(230,233,225,.12)';
+      ctx.beginPath(); ctx.moveTo(0, sy + .5); ctx.lineTo(W, sy + .5); ctx.stroke();
+      if (sy > 60) ctx.fillText((g / 10) + ' km', 4, sy - 4);
+    }
+  }
+  function ring(x, y, meters, color, dash) {
+    const [sx, sy] = toScreen(x, y);
+    ctx.setLineDash(dash || []);
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(sx, sy, meters / 100 * st.view.scale, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  function marker(p, color, kind) {
+    const [sx, sy] = toScreen(p[0], p[1]);
+    if (kind === 'gun') {
+      ctx.lineWidth = 2.5; ctx.strokeStyle = '#000'; ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(sx, sy, 8, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#06131c'; ctx.beginPath(); ctx.arc(sx, sy, 2.5, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.strokeStyle = color; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(sx, sy, 11, 0, Math.PI * 2);
+      ctx.moveTo(sx - 17, sy); ctx.lineTo(sx - 5, sy); ctx.moveTo(sx + 5, sy); ctx.lineTo(sx + 17, sy);
+      ctx.moveTo(sx, sy - 17); ctx.lineTo(sx, sy - 5); ctx.moveTo(sx, sy + 5); ctx.lineTo(sx, sy + 17);
+      ctx.stroke();
+      if (st.tgtFrom) {
+        ctx.font = '600 13px Barlow, sans-serif'; ctx.fillStyle = '#c99cf0';
+        ctx.fillText(st.tgtFrom, sx + 16, sy - 14);
+      }
+    }
+  }
+  function draw() {
+    if (!W) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#0c0e0b'; ctx.fillRect(0, 0, W, H);
+    drawMap();
+    drawGrid();
+    const w = WEAPONS[st.weapon];
+    if (st.gun) {
+      ring(st.gun[0], st.gun[1], w.max, 'rgba(111,183,232,.85)');
+      ring(st.gun[0], st.gun[1], w.min, 'rgba(239,107,90,.8)', [6, 5]);
+    }
+    const r = solve();
+    if (st.gun && st.tgt) {
+      const a = toScreen(...st.gun), b = toScreen(...st.tgt);
+      ctx.strokeStyle = r && r.status === 'ok' ? 'rgba(240,180,60,.9)' : 'rgba(239,107,90,.9)';
+      ctx.lineWidth = 2; ctx.setLineDash([8, 6]);
+      ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); ctx.setLineDash([]);
+    }
+    if (st.gun) marker(st.gun, '#6fb7e8', 'gun');
+    if (st.tgt) marker(st.tgt, st.tgtFrom ? '#c99cf0' : (r && r.status === 'ok' ? '#f0b43c' : '#ef6b5a'), 'tgt');
+  }
+
+  // ---------- readout + voice ----------
+  const fmtAz = (a) => String(Math.round(a) % 360).padStart(3, '0');
+  function update(speak, prefix) {
+    const r = solve();
+    const s = $('status');
+    $('az').innerHTML = (r ? fmtAz(r.az) : '---') + '<small>&deg;</small>';
+    $('mil').innerHTML = (r && r.status === 'ok' ? r.mils : '---') + '<small>mil</small>';
+    $('dist').textContent = r ? 'Range ' + Math.round(r.dist) + ' m' : 'Range —';
+    $('exact').textContent = r && r.status === 'ok' ? 'exact ' + Math.round(r.exact) + ' mil' : '';
+    $('from').textContent = st.tgtFrom ? 'Squad target from ' + st.tgtFrom : '';
+    const w = WEAPONS[st.weapon];
+    if (!st.gun) { s.className = 'status idle'; s.textContent = st.tgt ? 'Target received. Place your gun to get numbers.' : 'Place your gun first.'; }
+    else if (!st.tgt) { s.className = 'status idle'; s.textContent = 'Now click the target.'; }
+    else if (r.status === 'ok') { s.className = 'status ok'; s.textContent = 'In range. Fire when ready.'; }
+    else if (r.status === 'far') { s.className = 'status bad'; s.textContent = 'Too far. ' + w.name + ' reaches ' + w.max + ' m.'; }
+    else { s.className = 'status bad'; s.textContent = 'Too close. ' + w.name + ' needs at least ' + w.min + ' m.'; }
+    draw();
+    if (speak) say((prefix || '') + phrase());
+  }
+  function phrase() {
+    const r = solve();
+    if (!st.gun) return 'Place your gun first.';
+    if (!r) return 'Place a target.';
+    if (r.status === 'far') return 'Out of range. ' + Math.round(r.dist) + ' meters.';
+    if (r.status === 'close') return 'Too close. ' + Math.round(r.dist) + ' meters.';
+    let t = 'Turn to ' + (Math.round(r.az) % 360) + '. Set ' + r.mils + '.';
+    if (st.sayRange) t += ' Range ' + Math.round(r.dist / 10) * 10 + ' meters.';
+    return t;
+  }
+  function say(text) {
+    if (!st.voice || !('speechSynthesis' in window)) return;
+    try {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text || phrase());
+      u.rate = 1.05;
+      speechSynthesis.speak(u);
+    } catch (e) {}
+  }
+  let wake = null;
+  $('voiceBtn').onclick = async () => {
+    if (!('speechSynthesis' in window)) { $('voiceBtn').textContent = 'This browser cannot speak'; return; }
+    st.voice = !st.voice;
+    $('voiceBtn').setAttribute('aria-pressed', st.voice);
+    $('voiceBtn').textContent = st.voice ? 'Voice on (click to turn off)' : 'Turn voice on';
+    if (st.voice) {
+      say(st.gun && st.tgt ? phrase() : 'Voice on.');
+      try { wake = await navigator.wakeLock.request('screen'); } catch (e) {}
+    } else {
+      speechSynthesis.cancel();
+      try { wake && wake.release(); } catch (e) {}
+    }
+  };
+  document.addEventListener('visibilitychange', async () => {
+    if (st.voice && document.visibilityState === 'visible') { try { wake = await navigator.wakeLock.request('screen'); } catch (e) {} }
+  });
+  $('sayBtn').onclick = () => { if (!st.voice) $('voiceBtn').click(); else say(); };
+  $('sayRange').checked = st.sayRange;
+  $('sayRange').onchange = (e) => { st.sayRange = e.target.checked; store.set('sayRange', st.sayRange); };
+
+  // ---------- controls ----------
+  function setMode(m) {
+    st.mode = m;
+    $('modeGun').setAttribute('aria-pressed', m === 'gun');
+    $('modeTgt').setAttribute('aria-pressed', m === 'tgt');
+  }
+  function setLocked(v) {
+    st.locked = v;
+    $('lockBtn').setAttribute('aria-pressed', v);
+    $('lockBtn').textContent = v ? 'Gun locked' : 'Gun unlocked';
+  }
+  $('modeGun').onclick = () => { setLocked(false); setMode('gun'); };
+  $('modeTgt').onclick = () => setMode('tgt');
+  $('lockBtn').onclick = () => { setLocked(!st.locked); if (st.locked) setMode('tgt'); };
+  $('centerBtn').onclick = () => { if (st.gun) { st.view.cx = st.gun[0]; st.view.cy = st.gun[1]; draw(); } };
+
+  function buildSeg(el, items, current, onPick) {
+    el.innerHTML = '';
+    Object.entries(items).forEach(([id, it]) => {
+      const b = document.createElement('button');
+      b.textContent = it.name; b.setAttribute('aria-pressed', id === current);
+      b.onclick = () => onPick(id);
+      el.appendChild(b);
+    });
+  }
+  function loadMapState() {
+    st.gun = store.get('gun.' + st.map, null);
+    st.tgt = null; st.tgtFrom = null;
+    setLocked(!!st.gun);
+    setMode(st.gun ? 'tgt' : 'gun');
+    const c = st.gun || MAPS[st.map].start;
+    st.view.cx = c[0]; st.view.cy = c[1];
+    st.view.scale = Math.max(8, Math.min(W, H) / 22);
+    renderSaved();
+  }
+  function pickMap(id) {
+    st.map = id; store.set('map', id);
+    buildSeg($('mapSel'), MAPS, id, pickMap);
+    loadMapState(); update(false);
+  }
+  function pickWeapon(id) {
+    st.weapon = id; store.set('weapon', id);
+    buildSeg($('wpnSel'), WEAPONS, id, pickWeapon);
+    update(true);
+  }
+
+  // ---------- saved targets ----------
+  function savedList() { return store.get('targets.' + st.map, []); }
+  function renderSaved() {
+    const ul = $('savedList'); ul.innerHTML = '';
+    const list = savedList();
+    if (!list.length) { const li = document.createElement('li'); li.className = 'empty'; li.textContent = 'None yet. Place a target and press Save.'; ul.appendChild(li); return; }
+    list.forEach((t, i) => {
+      const li = document.createElement('li');
+      const name = document.createElement('input');
+      name.type = 'text'; name.value = t.name; name.id = 'tname' + i; name.setAttribute('aria-label', 'Target name');
+      name.onchange = () => { const l = savedList(); l[i].name = name.value; store.set('targets.' + st.map, l); };
+      const go = document.createElement('button'); go.textContent = 'Aim';
+      go.onclick = () => { setTarget([t.x, t.y], null, true); };
+      const del = document.createElement('button'); del.textContent = 'Remove';
+      del.onclick = () => { const l = savedList(); l.splice(i, 1); store.set('targets.' + st.map, l); renderSaved(); };
+      li.append(name, go, del); ul.appendChild(li);
+    });
+  }
+  $('saveBtn').onclick = () => {
+    if (!st.tgt) return;
+    const l = savedList();
+    l.push({ name: 'Target ' + (l.length + 1), x: st.tgt[0], y: st.tgt[1] });
+    store.set('targets.' + st.map, l); renderSaved();
+  };
+
+  function setTarget(p, from, broadcast) {
+    st.tgt = p; st.tgtFrom = from || null;
+    update(true, from ? 'Squad target from ' + from + '. ' : '');
+    if (broadcast && !from) squad.sendTarget(p);
+  }
+
+  // ---------- pointer: pan, pinch, wheel, click ----------
+  const pts = new Map();
+  let downAt = null, moved = false, pinch0 = null;
+  cv.addEventListener('pointerdown', (e) => {
+    cv.setPointerCapture(e.pointerId);
+    pts.set(e.pointerId, [e.offsetX, e.offsetY]);
+    if (pts.size === 1) { downAt = [e.offsetX, e.offsetY]; moved = false; }
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()];
+      pinch0 = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), scale: st.view.scale };
+      moved = true;
+    }
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!pts.has(e.pointerId)) return;
+    const prev = pts.get(e.pointerId);
+    pts.set(e.pointerId, [e.offsetX, e.offsetY]);
+    if (pts.size === 1) {
+      if (downAt && Math.hypot(e.offsetX - downAt[0], e.offsetY - downAt[1]) > 6) moved = true;
+      if (moved) {
+        st.view.cx -= (e.offsetX - prev[0]) / st.view.scale;
+        st.view.cy += (e.offsetY - prev[1]) / st.view.scale;
+        scheduleDraw();
+      }
+    } else if (pts.size === 2 && pinch0) {
+      const [a, b] = [...pts.values()];
+      const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      zoomAt((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (pinch0.scale * d / pinch0.d) / st.view.scale);
+    }
+  });
+  function endPointer(e) {
+    if (!pts.has(e.pointerId)) return;
+    pts.delete(e.pointerId);
+    if (pts.size < 2) pinch0 = null;
+    if (pts.size === 0 && !moved && e.type === 'pointerup') place(e.offsetX, e.offsetY);
+  }
+  cv.addEventListener('pointerup', endPointer);
+  cv.addEventListener('pointercancel', endPointer);
+  cv.addEventListener('wheel', (e) => { e.preventDefault(); zoomAt(e.offsetX, e.offsetY, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+  cv.addEventListener('contextmenu', (e) => e.preventDefault());
+  function zoomAt(sx, sy, f) {
+    const before = toGame(sx, sy);
+    st.view.scale = Math.max(2, Math.min(600, st.view.scale * f));
+    const after = toGame(sx, sy);
+    st.view.cx += before[0] - after[0]; st.view.cy += before[1] - after[1];
+    scheduleDraw();
+  }
+  function inMap(p, m) { return p[0] >= 0 && p[1] >= 0 && p[0] <= m.w && p[1] <= m.h; }
+  function place(sx, sy) {
+    const p = toGame(sx, sy);
+    if (!inMap(p, MAPS[st.map])) return;
+    if (st.mode === 'gun' && !st.locked) {
+      st.gun = p; store.set('gun.' + st.map, p);
+      setLocked(true); setMode('tgt');
+      update(false);
+      say('Gun placed.');
+    } else {
+      setTarget(p, null, true);
+    }
+  }
+
+  // ---------- squad rooms (public MQTT broker, no account) ----------
+  const squad = (function () {
+    const myId = Math.random().toString(36).slice(2, 10);
+    let client = null, room = null;
+    const seen = new Map(); // clientId -> last heartbeat ms
+    let beat = null;
+    const cleanCode = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+    const cleanName = (s) => String(s || '').replace(/[\u0000-\u001f<>]/g, '').trim().slice(0, 16);
+    const callsign = () => cleanName($('callsign').value) || 'Squadmate';
+    $('callsign').value = store.get('callsign', '');
+    $('callsign').onchange = () => store.set('callsign', cleanName($('callsign').value));
+
+    function net(state, text) {
+      $('netDot').className = 'dot' + (state === 'on' ? ' on' : state === 'err' ? ' err' : '');
+      $('netText').textContent = text;
+    }
+    function members() {
+      const now = Date.now();
+      for (const [k, t] of seen) if (now - t > 45000) seen.delete(k);
+      return seen.size + 1;
+    }
+    function showMembers() {
+      if (client && client.connected) { const n = members(); net('on', 'Connected. ' + n + (n === 1 ? ' person' : ' people') + ' in the room.'); }
+    }
+    function publish(kind, payload) {
+      if (!client || !client.connected || !room) return;
+      client.publish(TOPIC_ROOT + room + '/' + kind, JSON.stringify(Object.assign({ v: 1, id: myId }, payload)), { qos: 0, retain: false });
+    }
+    function onMessage(topic, buf) {
+      let msg;
+      try { msg = JSON.parse(new TextDecoder().decode(buf)); } catch (e) { return; }
+      if (!msg || msg.v !== 1 || typeof msg.id !== 'string' || msg.id === myId) return;
+      seen.set(msg.id.slice(0, 12), Date.now());
+      if (topic.endsWith('/hello')) { showMembers(); return; }
+      if (!topic.endsWith('/target')) return;
+      const m = MAPS[msg.map];
+      const x = Number(msg.x), y = Number(msg.y);
+      if (!m || !Number.isFinite(x) || !Number.isFinite(y) || !inMap([x, y], m)) return;
+      const from = cleanName(msg.by) || 'Squadmate';
+      if (msg.map !== st.map) {
+        $('from').textContent = from + ' marked a target on ' + m.name + '. Switch map to use it.';
+        return;
+      }
+      setTarget([x, y], from, false);
+      showMembers();
+    }
+    function join(code) {
+      code = cleanCode(code);
+      if (code.length < 4) { $('joinCode').focus(); return; }
+      leave(true);
+      room = code;
+      $('roomCode').textContent = code;
+      $('squadOff').hidden = true; $('squadOn').hidden = false;
+      store.set('room', code);
+      history.replaceState(null, '', location.pathname + '?room=' + code);
+      if (!window.mqtt) { net('err', 'Could not load the squad connection. Check your internet and reload.'); return; }
+      net('', 'Connecting…');
+      client = window.mqtt.connect(BROKER, { clientId: 'wfc_' + myId + '_' + Math.random().toString(36).slice(2, 6), clean: true, reconnectPeriod: 3000, connectTimeout: 10000 });
+      client.on('connect', () => {
+        client.subscribe([TOPIC_ROOT + room + '/target', TOPIC_ROOT + room + '/hello']);
+        publish('hello', { by: callsign() });
+        showMembers();
+      });
+      client.on('reconnect', () => net('', 'Reconnecting…'));
+      client.on('offline', () => net('err', 'Offline. Retrying…'));
+      client.on('error', () => net('err', 'Connection problem. Retrying…'));
+      client.on('message', onMessage);
+      beat = setInterval(() => { publish('hello', { by: callsign() }); showMembers(); }, 15000);
+    }
+    function leave(silent) {
+      if (beat) clearInterval(beat); beat = null;
+      if (client) { try { client.end(true); } catch (e) {} }
+      client = null; room = null; seen.clear();
+      if (!silent) {
+        store.set('room', null);
+        $('squadOff').hidden = false; $('squadOn').hidden = true;
+        history.replaceState(null, '', location.pathname);
+      }
+    }
+    function makeCode() {
+      const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      const r = new Uint32Array(6); crypto.getRandomValues(r);
+      return Array.from(r, (n) => abc[n % abc.length]).join('');
+    }
+    $('createBtn').onclick = () => join(makeCode());
+    $('joinBtn').onclick = () => join($('joinCode').value);
+    $('joinCode').onkeydown = (e) => { if (e.key === 'Enter') join($('joinCode').value); };
+    $('leaveBtn').onclick = () => leave(false);
+    $('inviteBtn').onclick = async () => {
+      const link = location.origin + location.pathname + '?room=' + room;
+      try { await navigator.clipboard.writeText(link); $('inviteBtn').textContent = 'Link copied'; }
+      catch (e) { $('inviteBtn').textContent = link; }
+      setTimeout(() => { $('inviteBtn').textContent = 'Copy invite link'; }, 2500);
+    };
+    return {
+      join,
+      sendTarget(p) { if ($('shareMine').checked) publish('target', { map: st.map, x: +p[0].toFixed(3), y: +p[1].toFixed(3), by: callsign() }); },
+      initialRoom() { return cleanCode(new URLSearchParams(location.search).get('room')) || cleanCode(store.get('room', '')); },
+    };
+  })();
+
+  // ---------- boot ----------
+  buildSeg($('mapSel'), MAPS, st.map, pickMap);
+  buildSeg($('wpnSel'), WEAPONS, st.weapon, pickWeapon);
+  window.addEventListener('resize', resize);
+  resize();
+  loadMapState();
+  if (!st.gun) {
+    // worked example on first visit so the page is not empty
+    const s = MAPS[st.map].start;
+    st.gun = [s[0] - 2.2, s[1] - 1.6]; st.tgt = [s[0], s[1]];
+    setLocked(false); setMode('gun');
+    $('hint').textContent = 'Example shown. Click "Place gun", then click where your mortar is. Drag to move, scroll or pinch to zoom.';
+  }
+  update(false);
+  const r0 = squad.initialRoom();
+  if (r0) squad.join(r0);
+})();
+</script>
+</body>
+</html>
