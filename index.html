@@ -41,6 +41,7 @@ h1 { font-family: var(--f-num); font-weight: 700; font-size: 20px; letter-spacin
 .seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .seg button { border: 0; border-radius: 0; flex: 1; }
 .seg button + button { border-left: 1px solid var(--line); }
+#roleSel button { padding: 8px 4px; }
 button { white-space: nowrap; font: 600 14px var(--f-body); color: var(--ink); background: #232822; border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; cursor: pointer; }
 button:hover { background: #2b3129; }
 button:disabled { opacity: .5; cursor: default; }
@@ -212,6 +213,8 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
     mortar:    { name: 'Mortar', pos: 'gun', weapon: 'mortar', view: 1.5 },
     artillery: { name: 'SPH-2', pos: 'gun', weapon: 'artillery', view: 5.5 },
     sniper:    { name: 'Sniper', pos: 'me', view: 1.5 },
+    // guides report the video feed cuts about 3 km from the launcher and the drone is lost; battery can run out sooner
+    stingray:  { name: 'Stingray', pos: 'launcher', view: 7, range: 3000, warn: 2700 },
   };
   // Scope zero moves in 100 m clicks (Page Up / Page Down in game); the longest zero depends on rifle and scope.
   const SCOPES = { 400: { name: '400' }, 600: { name: '600' }, 800: { name: '800' }, 1000: { name: '1000' }, 1500: { name: '1500' } };
@@ -278,7 +281,8 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
   if (!RETICLES[st.reticle]) st.reticle = 'mrad';
   const role = () => ROLES[st.role];
   const isGun = () => role().pos === 'gun';
-  const posWord = () => isGun() ? 'gun' : 'position';
+  const posWord = () => isGun() ? 'gun' : role().pos === 'launcher' ? 'launcher' : 'position';
+  const posCap = () => posWord().charAt(0).toUpperCase() + posWord().slice(1);
 
   const $ = (id) => document.getElementById(id);
   const cv = $('map'), ctx = cv.getContext('2d');
@@ -367,6 +371,7 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
   }
   function solveRole(dist, az) {
     if (st.role === 'spotter') return { status: 'ok', dist, az };
+    if (st.role === 'stingray') return { status: dist > role().range ? 'far' : 'ok', dist, az, near: dist > role().warn };
     if (st.role === 'sniper') {
       const a = sniperAim(dist);
       // beyond about 1.5x the longest zero the hold is metres above the head: call it out of reach
@@ -461,6 +466,8 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
       const w = WEAPONS[role().weapon];
       ring(st.gun[0], st.gun[1], w.max, 'rgba(111,183,232,.85)');
       ring(st.gun[0], st.gun[1], w.min, 'rgba(239,107,90,.8)', [6, 5]);
+    } else if (st.gun && st.role === 'stingray') {
+      ring(st.gun[0], st.gun[1], role().range, 'rgba(111,183,232,.85)', [6, 5]);
     } else if (st.gun && st.role === 'sniper') {
       ring(st.gun[0], st.gun[1], Math.min(RIFLES[st.rifle].zmax, st.scopeMax), 'rgba(111,183,232,.85)', [6, 5]);
     }
@@ -493,7 +500,7 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
       $('k2').textContent = 'Zero';
       $('mil').innerHTML = (ok ? r.zero : '---') + '<small>m</small>';
       $('exact').textContent = ok && Math.abs(r.mil) >= 0.05 ? 'hold ' + Math.abs(r.mil).toFixed(1) + ' mil ' + (r.mil > 0 ? 'high' : 'low') : '';
-    } else if (st.role === 'spotter') {
+    } else if (st.role === 'spotter' || st.role === 'stingray') {
       $('k2').textContent = 'Range';
       $('mil').innerHTML = (r ? Math.round(r.dist) : '---') + '<small>m</small>';
       $('exact').textContent = '';
@@ -524,6 +531,8 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
     else if (!st.tgt) { s.className = 'status idle'; s.textContent = 'Click the map to ping, then click a ping to ' + (isGun() ? 'fire on it.' : 'get its numbers.'); }
     else if (ok && st.role === 'sniper') { s.className = 'status ok'; s.textContent = 'Set zero ' + r.zero + ' m' + (r.past ? ' (your longest), then hold high.' : '.'); }
     else if (ok && st.role === 'spotter') { s.className = 'status ok'; s.textContent = 'Bearing and range from you.'; }
+    else if (ok && st.role === 'stingray') { s.className = r.near ? 'status bad' : 'status ok'; s.textContent = r.near ? 'Close to the signal limit (about 3 km). Fly straight there.' : 'In reach. Launch when ready.'; }
+    else if (r.status === 'far' && st.role === 'stingray') { s.className = 'status bad'; s.textContent = 'Past the signal limit (about 3 km). The drone would be lost.'; }
     else if (ok) { s.className = 'status ok'; s.textContent = 'In range. Fire when ready.'; }
     else if (r.status === 'far') { s.className = 'status bad'; s.textContent = w ? 'Too far. ' + w.name + ' reaches ' + w.max + ' m.' : 'Too far for a rifle shot. Get closer.'; }
     else { s.className = 'status bad'; s.textContent = 'Too close. ' + w.name + ' needs at least ' + w.min + ' m.'; }
@@ -537,6 +546,7 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
     if (!r) return 'Place a target.';
     const dir = Math.round(r.az) % 360, m10 = Math.round(r.dist / 10) * 10;
     if (st.role === 'spotter') return 'Bearing ' + dir + '. ' + m10 + ' meters.';
+    if (st.role === 'stingray') return 'Turn to ' + dir + '. ' + m10 + ' meters.' + (r.status === 'far' ? ' Past signal range.' : r.near ? ' Near signal limit.' : '');
     if (st.role === 'sniper' && r.status === 'far') return 'Too far. ' + m10 + ' meters.';
     if (st.role === 'sniper') return 'Turn to ' + dir + '. ' + m10 + ' meters. Zero ' + r.zero + '. ' + (Math.abs(r.h) > 0.55 && r.marks ? r.marks : r.words) + '.';
     if (r.status === 'far') return 'Out of range. ' + Math.round(r.dist) + ' meters.';
@@ -584,11 +594,12 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
   function setLocked(v) {
     st.locked = v;
     $('lockBtn').setAttribute('aria-pressed', v);
-    $('lockBtn').textContent = (isGun() ? 'Gun ' : 'Position ') + (v ? 'locked' : 'unlocked');
+    $('lockBtn').textContent = posCap() + ' ' + (v ? 'locked' : 'unlocked');
   }
   function setLabels() {
-    $('modeGun').textContent = isGun() ? 'Place gun' : 'Place me';
-    $('centerBtn').textContent = isGun() ? 'Center on gun' : 'Center on me';
+    const who = role().pos === 'me' ? 'me' : posWord();
+    $('modeGun').textContent = 'Place ' + who;
+    $('centerBtn').textContent = 'Center on ' + who;
     $('scopeRow').hidden = st.role !== 'sniper';
     setLocked(st.locked);
   }
@@ -715,6 +726,7 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
     if (!r) return 'place your ' + posWord() + ' for numbers';
     if (r.status === 'ok' && st.role === 'sniper') return '<b>' + fmtAz(r.az) + '°  zero ' + r.zero + '</b> · ' + Math.round(r.dist) + ' m · ' + r.words.replace(/^aim (at the )?/, '');
     if (r.status === 'ok' && st.role === 'spotter') return '<b>' + fmtAz(r.az) + '°  ' + Math.round(r.dist) + ' m</b>';
+    if (st.role === 'stingray') return '<b>' + fmtAz(r.az) + '°  ' + Math.round(r.dist) + ' m</b>' + (r.status === 'far' ? ' · past signal range' : r.near ? ' · near limit' : '');
     if (r.status === 'ok') return '<b>' + fmtAz(r.az) + '°  ' + r.mils + ' mil</b> · ' + Math.round(r.dist) + ' m';
     return (r.status === 'far' ? 'out of range' : 'too close') + ' · ' + Math.round(r.dist) + ' m';
   }
@@ -801,7 +813,7 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
       store.set('gun.' + st.map, p); store.set('gunErr.' + st.map, st.gunErr);
       setLocked(true); setMode('tgt');
       update(false);
-      say(isGun() ? 'Gun placed.' : 'Position placed.');
+      say(posCap() + ' placed.');
     } else {
       const hit = pingAt(sx, sy);
       if (hit) { fireOnPing(hit); return; }

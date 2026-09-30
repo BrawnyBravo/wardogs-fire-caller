@@ -6,11 +6,12 @@ A fan-made mortar and artillery helper for WARDOGS that **reads the firing solut
 
 ## What it does
 
-- Pick your **role**: Spotter, Mortar (L81), SPH-2 or Sniper.
+- Pick your **role**: Spotter, Mortar (L81), SPH-2, Sniper or Stingray.
 - Place your gun (or yourself) once. Then click the map to drop a **ping**, and click a ping (on the map or in the list) to get its numbers. The page shows and speaks them:
   - Mortar and SPH-2: direction and elevation, for example "Ping 2. Turn to 54. Set 700."
   - Sniper: direction, range, the scope zero to dial (zero moves in 100 m steps) and where to put the crosshair on the target: "aim center chest", "aim at the head", "aim 0.4 m above the head", and so on. If your scope has hold marks, it also names the mark, for example "put the target on mark 2 below the crosshair". Pick your rifle (bullet speeds from community tools that read the game files) and your scope's marks (mil or MOA). Past the rifle's longest zero it tells you how far to hold over; well past it, it says the shot is too far.
   - Spotter: bearing and range from you, to call out to the squad.
+  - Stingray: place the launcher; each ping gets direction and distance, with a warning near and past the drone's signal limit (guides report about 3 km, after which the drone is lost). Battery can run out sooner, so fly straight.
 - The ping list shows the numbers for every ping at a glance, so you can pick the closest or the one in range.
 - Works on Bakurani, Ozeti and Zestafona.
 - Warns when a target is too close or out of range.
