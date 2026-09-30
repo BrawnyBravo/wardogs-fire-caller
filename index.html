@@ -56,6 +56,9 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
 .status { grid-column: 1 / -1; font-weight: 600; font-size: 14px; padding: 6px 10px; border-radius: 5px; background: #20251f; }
 .status.ok { color: var(--ok); } .status.bad { color: var(--bad); } .status.idle { color: var(--muted); }
 .from { grid-column: 1 / -1; font-size: 13px; color: var(--squad); min-height: 1em; }
+.prec { grid-column: 1 / -1; font-size: 13px; color: var(--muted); }
+.prec:empty { display: none; }
+.prec.warn { color: var(--amber); }
 .stack { display: grid; gap: 8px; }
 .big { font-size: 16px; padding: 12px; }
 .check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
@@ -111,15 +114,20 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       <div class="seg" id="mapSel" role="group" aria-label="Map"></div>
     </div>
     <div>
-      <span class="lab">Weapon</span>
-      <div class="seg" id="wpnSel" role="group" aria-label="Weapon"></div>
+      <span class="lab">Role</span>
+      <div class="seg" id="roleSel" role="group" aria-label="Role"></div>
+    </div>
+    <div id="scopeRow" hidden>
+      <span class="lab">Scope's longest zero (m)</span>
+      <div class="seg" id="scopeSel" role="group" aria-label="Scope's longest zero"></div>
     </div>
 
     <div class="readout" aria-live="polite">
       <div><div class="k">Turn to</div><div class="v" id="az">---<small>&deg;</small></div></div>
-      <div><div class="k">Set</div><div class="v" id="mil">---<small>mil</small></div></div>
+      <div><div class="k" id="k2">Set</div><div class="v" id="mil">---<small>mil</small></div></div>
       <div class="wide"><span id="dist">Range —</span><span id="exact"></span></div>
       <div class="status idle" id="status">Place your gun, then a target.</div>
+      <div class="prec" id="prec"></div>
       <div class="from" id="from"></div>
     </div>
 
@@ -184,6 +192,17 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     mortar: { name: 'L81 Mortar', min: 132, max: 684, step: 50, table: [[150,684],[200,661],[250,637],[300,609],[350,578],[400,545],[450,510],[500,470],[550,430],[600,385],[650,340],[700,290],[750,240],[800,187],[850,132]] },
     artillery: { name: 'SPH-2', min: 786, max: 2679, step: 10, table: [[600,2679],[650,2669],[700,2644],[750,2602],[800,2545],[850,2473],[900,2386],[950,2284],[1000,2168],[1050,2037],[1100,1892],[1150,1733],[1200,1560],[1250,1374],[1300,1175],[1350,963],[1390,786]] },
   };
+  // pos: what the blue marker stands for. view: km shown across the short side of the map on load.
+  const ROLES = {
+    spotter:   { name: 'Spotter', pos: 'me', view: 2.2 },
+    mortar:    { name: 'Mortar', pos: 'gun', weapon: 'mortar', view: 1.5 },
+    artillery: { name: 'SPH-2', pos: 'gun', weapon: 'artillery', view: 5.5 },
+    sniper:    { name: 'Sniper', pos: 'me', view: 1.5 },
+  };
+  // Scope zero moves in 100 m clicks (Page Up / Page Down in game); the longest zero depends on rifle and scope.
+  const SCOPES = { 400: { name: '400' }, 600: { name: '600' }, 800: { name: '800' }, 1000: { name: '1000' }, 1500: { name: '1500' } };
+  // A click lands within a few screen pixels of where you meant; that slop is what bends the direction at short range.
+  const CLICK_PX = 3, ASSUMED_ERR_M = 8, WARN_DEG = 2;
   const TILE_URL = (m, z, x, y) => `https://djzet.github.io/wardogs-maps/maps/${m}/tiles/zoom_${z}/${x}_${y}.webp`;
   const MAX_Z = 7, BASE_Z = 2;
   const BROKER = 'wss://broker.hivemq.com:8884/mqtt';
@@ -196,16 +215,21 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
 
   const st = {
     map: store.get('map', 'bakurani'),
-    weapon: store.get('weapon', 'mortar'),
-    mode: 'gun', locked: false,
-    gun: null, tgt: null, tgtFrom: null,
+    role: store.get('role', store.get('weapon', 'mortar')),
+    scopeMax: store.get('scopeMax', 1000),
+    mode: 'gun', locked: false, staleGun: false,
+    gun: null, gunErr: ASSUMED_ERR_M, tgt: null, tgtErr: ASSUMED_ERR_M, tgtFrom: null,
     voice: false,
     pings: [], activePing: null, pingN: 0,
     sayRange: store.get('sayRange', false),
     view: { scale: 20, cx: 0, cy: 0 }, // screen px per game unit; game point at screen centre
   };
   if (!MAPS[st.map]) st.map = 'bakurani';
-  if (!WEAPONS[st.weapon]) st.weapon = 'mortar';
+  if (!ROLES[st.role]) st.role = 'mortar';
+  if (!SCOPES[st.scopeMax]) st.scopeMax = 1000;
+  const role = () => ROLES[st.role];
+  const isGun = () => role().pos === 'gun';
+  const posWord = () => isGun() ? 'gun' : 'position';
 
   const $ = (id) => document.getElementById(id);
   const cv = $('map'), ctx = cv.getContext('2d');
@@ -256,13 +280,33 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     }
     return null;
   }
-  function solve() { return solveFor(st.tgt); }
-  function solveFor(p) {
+  // meters of placement slop for a click made at the current zoom
+  const clickErr = () => CLICK_PX * 100 / st.view.scale;
+  // worst-case direction error from both ends being a little off, in degrees
+  function spread(dist, errA, errB) {
+    if (!(dist > 0)) return null;
+    return Math.atan2((errA || ASSUMED_ERR_M) + (errB || ASSUMED_ERR_M), dist) * 180 / Math.PI;
+  }
+  function solve() { return solveFor(st.tgt, st.tgtErr); }
+  function solveFor(p, err) {
     if (!st.gun || !p) return null;
-    const w = WEAPONS[st.weapon];
     const dx = (p[0] - st.gun[0]) * 100, dy = (p[1] - st.gun[1]) * 100;
     const dist = Math.hypot(dx, dy);
     const az = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+    const off = spread(dist, st.gunErr, err);
+    const r = solveRole(dist, az);
+    r.spread = off;
+    return r;
+  }
+  function solveRole(dist, az) {
+    if (st.role === 'spotter') return { status: 'ok', dist, az };
+    if (st.role === 'sniper') {
+      const zero = Math.max(100, Math.min(st.scopeMax, Math.round(dist / 100) * 100));
+      const off = dist - zero;
+      const hold = off > 50 ? 'high' : off >= 30 ? 'a touch high' : off < -50 ? 'low' : off <= -30 ? 'a touch low' : '';
+      return { status: 'ok', dist, az, zero, hold };
+    }
+    const w = WEAPONS[role().weapon];
     if (dist < w.min) return { status: 'close', dist, az };
     if (dist > w.max) return { status: 'far', dist, az };
     const exact = milsFor(dist, w);
@@ -347,15 +391,23 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     ctx.fillStyle = '#0c0e0b'; ctx.fillRect(0, 0, W, H);
     drawMap();
     drawGrid();
-    const w = WEAPONS[st.weapon];
-    if (st.gun) {
+    if (st.gun && isGun()) {
+      const w = WEAPONS[role().weapon];
       ring(st.gun[0], st.gun[1], w.max, 'rgba(111,183,232,.85)');
       ring(st.gun[0], st.gun[1], w.min, 'rgba(239,107,90,.8)', [6, 5]);
+    } else if (st.gun && st.role === 'sniper') {
+      ring(st.gun[0], st.gun[1], st.scopeMax, 'rgba(111,183,232,.85)', [6, 5]);
     }
     const r = solve();
     if (st.gun && st.tgt) {
       const a = toScreen(...st.gun), b = toScreen(...st.tgt);
       ctx.strokeStyle = r && r.status === 'ok' ? 'rgba(240,180,60,.9)' : 'rgba(239,107,90,.9)';
+      // cone showing how far the direction could swing from placement slop
+      if (r && r.spread > WARN_DEG) {
+        const len = Math.hypot(b[0] - a[0], b[1] - a[1]), ang = Math.atan2(b[1] - a[1], b[0] - a[0]), sp = r.spread * Math.PI / 180;
+        ctx.fillStyle = 'rgba(240,180,60,.12)';
+        ctx.beginPath(); ctx.moveTo(...a); ctx.arc(a[0], a[1], len, ang - sp, ang + sp); ctx.closePath(); ctx.fill();
+      }
       ctx.lineWidth = 2; ctx.setLineDash([8, 6]);
       ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke(); ctx.setLineDash([]);
     }
@@ -369,15 +421,38 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
   function update(speak, prefix) {
     const r = solve();
     const s = $('status');
+    const ok = r && r.status === 'ok';
     $('az').innerHTML = (r ? fmtAz(r.az) : '---') + '<small>&deg;</small>';
-    $('mil').innerHTML = (r && r.status === 'ok' ? r.mils : '---') + '<small>mil</small>';
+    if (st.role === 'sniper') {
+      $('k2').textContent = 'Zero';
+      $('mil').innerHTML = (ok ? r.zero : '---') + '<small>m</small>';
+      $('exact').textContent = ok && r.hold ? 'hold ' + r.hold : '';
+    } else if (st.role === 'spotter') {
+      $('k2').textContent = 'Range';
+      $('mil').innerHTML = (r ? Math.round(r.dist) : '---') + '<small>m</small>';
+      $('exact').textContent = '';
+    } else {
+      $('k2').textContent = 'Set';
+      $('mil').innerHTML = (ok ? r.mils : '---') + '<small>mil</small>';
+      $('exact').textContent = ok ? 'exact ' + Math.round(r.exact) + ' mil' : '';
+    }
     $('dist').textContent = r ? 'Range ' + Math.round(r.dist) + ' m' : 'Range —';
-    $('exact').textContent = r && r.status === 'ok' ? 'exact ' + Math.round(r.exact) + ' mil' : '';
     $('from').textContent = st.tgtFrom ? 'Squad target from ' + st.tgtFrom : '';
-    const w = WEAPONS[st.weapon];
-    if (!st.gun) { s.className = 'status idle'; s.textContent = st.tgt ? 'Target received. Place your gun to get numbers.' : 'Place your gun first.'; }
-    else if (!st.tgt) { s.className = 'status idle'; s.textContent = 'Click the map to ping, then click a ping to fire on it.'; }
-    else if (r.status === 'ok') { s.className = 'status ok'; s.textContent = 'In range. Fire when ready.'; }
+    const pr = $('prec');
+    if (r && r.spread != null) {
+      const d = r.spread < 1 ? r.spread.toFixed(1) : Math.round(r.spread);
+      pr.className = 'prec' + (r.spread > WARN_DEG ? ' warn' : '');
+      pr.textContent = r.spread > WARN_DEG
+        ? 'Direction could be off by up to ' + d + '°. Zoom in closer and place your ' + posWord() + ' and the ping again.'
+        : 'Direction good to about ' + d + '°.';
+    } else { pr.textContent = ''; }
+    const w = isGun() ? WEAPONS[role().weapon] : null;
+    if (!st.gun) { s.className = 'status idle'; s.textContent = st.tgt ? 'Target received. Place your ' + posWord() + ' to get numbers.' : 'Place your ' + posWord() + ' first.'; }
+    else if (st.staleGun) { s.className = 'status idle'; s.textContent = 'Your ' + posWord() + ' from last time is shown. Click where it is now, or press Ping to keep it.'; }
+    else if (!st.tgt) { s.className = 'status idle'; s.textContent = 'Click the map to ping, then click a ping to ' + (isGun() ? 'fire on it.' : 'get its numbers.'); }
+    else if (ok && st.role === 'sniper') { s.className = 'status ok'; s.textContent = r.dist > st.scopeMax + 50 ? 'Past your longest zero. Hold high.' : 'Set zero ' + r.zero + ' m' + (r.hold ? ', hold ' + r.hold : '') + '.'; }
+    else if (ok && st.role === 'spotter') { s.className = 'status ok'; s.textContent = 'Bearing and range from you.'; }
+    else if (ok) { s.className = 'status ok'; s.textContent = 'In range. Fire when ready.'; }
     else if (r.status === 'far') { s.className = 'status bad'; s.textContent = 'Too far. ' + w.name + ' reaches ' + w.max + ' m.'; }
     else { s.className = 'status bad'; s.textContent = 'Too close. ' + w.name + ' needs at least ' + w.min + ' m.'; }
     draw();
@@ -386,11 +461,14 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
   }
   function phrase() {
     const r = solve();
-    if (!st.gun) return 'Place your gun first.';
+    if (!st.gun) return 'Place your ' + posWord() + ' first.';
     if (!r) return 'Place a target.';
+    const dir = Math.round(r.az) % 360, m10 = Math.round(r.dist / 10) * 10;
+    if (st.role === 'spotter') return 'Bearing ' + dir + '. ' + m10 + ' meters.';
+    if (st.role === 'sniper') return 'Turn to ' + dir + '. ' + m10 + ' meters. Zero ' + r.zero + (r.hold ? ', hold ' + r.hold : '') + '.';
     if (r.status === 'far') return 'Out of range. ' + Math.round(r.dist) + ' meters.';
     if (r.status === 'close') return 'Too close. ' + Math.round(r.dist) + ' meters.';
-    let t = 'Turn to ' + (Math.round(r.az) % 360) + '. Set ' + r.mils + '.';
+    let t = 'Turn to ' + dir + '. Set ' + r.mils + '.';
     if (st.sayRange) t += ' Range ' + Math.round(r.dist / 10) * 10 + ' meters.';
     return t;
   }
@@ -433,11 +511,18 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
   function setLocked(v) {
     st.locked = v;
     $('lockBtn').setAttribute('aria-pressed', v);
-    $('lockBtn').textContent = v ? 'Gun locked' : 'Gun unlocked';
+    $('lockBtn').textContent = (isGun() ? 'Gun ' : 'Position ') + (v ? 'locked' : 'unlocked');
   }
+  function setLabels() {
+    $('modeGun').textContent = isGun() ? 'Place gun' : 'Place me';
+    $('centerBtn').textContent = isGun() ? 'Center on gun' : 'Center on me';
+    $('scopeRow').hidden = st.role !== 'sniper';
+    setLocked(st.locked);
+  }
+  function keepGun() { if (st.staleGun) { st.staleGun = false; setLocked(true); update(false); } }
   $('modeGun').onclick = () => { setLocked(false); setMode('gun'); };
-  $('modeTgt').onclick = () => setMode('tgt');
-  $('lockBtn').onclick = () => { setLocked(!st.locked); if (st.locked) setMode('tgt'); };
+  $('modeTgt').onclick = () => { setMode('tgt'); keepGun(); };
+  $('lockBtn').onclick = () => { setLocked(!st.locked); if (st.locked) { setMode('tgt'); keepGun(); } };
   $('centerBtn').onclick = () => { if (st.gun) { st.view.cx = st.gun[0]; st.view.cy = st.gun[1]; draw(); } };
 
   function buildSeg(el, items, current, onPick) {
@@ -449,14 +534,17 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       el.appendChild(b);
     });
   }
-  function loadMapState() {
+  // onOpen: a position remembered from an earlier visit is probably from another match, so ask before trusting it
+  function loadMapState(onOpen) {
     st.gun = store.get('gun.' + st.map, null);
+    st.gunErr = store.get('gunErr.' + st.map, ASSUMED_ERR_M);
     st.tgt = null; st.tgtFrom = null; st.activePing = null;
-    setLocked(!!st.gun);
-    setMode(st.gun ? 'tgt' : 'gun');
+    st.staleGun = !!(onOpen && st.gun);
+    setLocked(!!st.gun && !st.staleGun);
+    setMode(st.gun && !st.staleGun ? 'tgt' : 'gun');
     const c = st.gun || MAPS[st.map].start;
     st.view.cx = c[0]; st.view.cy = c[1];
-    st.view.scale = Math.max(8, Math.min(W, H) / 22);
+    st.view.scale = Math.max(8, Math.min(W, H) / (role().view * 10));
     renderSaved();
   }
   function pickMap(id) {
@@ -464,9 +552,15 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     buildSeg($('mapSel'), MAPS, id, pickMap);
     loadMapState(); update(false);
   }
-  function pickWeapon(id) {
-    st.weapon = id; store.set('weapon', id);
-    buildSeg($('wpnSel'), WEAPONS, id, pickWeapon);
+  function pickRole(id) {
+    st.role = id; store.set('role', id);
+    buildSeg($('roleSel'), ROLES, id, pickRole);
+    setLabels();
+    update(true);
+  }
+  function pickScope(id) {
+    st.scopeMax = Number(id); store.set('scopeMax', st.scopeMax);
+    buildSeg($('scopeSel'), SCOPES, String(id), pickScope);
     update(true);
   }
 
@@ -482,7 +576,7 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       name.type = 'text'; name.value = t.name; name.id = 'tname' + i; name.setAttribute('aria-label', 'Target name');
       name.onchange = () => { const l = savedList(); l[i].name = name.value; store.set('targets.' + st.map, l); };
       const go = document.createElement('button'); go.textContent = 'Aim';
-      go.onclick = () => { setTarget([t.x, t.y], null, true); };
+      go.onclick = () => { setTarget([t.x, t.y], null, true, null, t.e); };
       const del = document.createElement('button'); del.textContent = 'Remove';
       del.onclick = () => { const l = savedList(); l.splice(i, 1); store.set('targets.' + st.map, l); renderSaved(); };
       li.append(name, go, del); ul.appendChild(li);
@@ -491,14 +585,14 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
   $('saveBtn').onclick = () => {
     if (!st.tgt) return;
     const l = savedList();
-    l.push({ name: 'Target ' + (l.length + 1), x: st.tgt[0], y: st.tgt[1] });
+    l.push({ name: 'Target ' + (l.length + 1), x: st.tgt[0], y: st.tgt[1], e: st.tgtErr });
     store.set('targets.' + st.map, l); renderSaved();
   };
 
-  function setTarget(p, from, broadcast, pingId) {
-    st.tgt = p; st.tgtFrom = from || null; st.activePing = pingId || null;
+  function setTarget(p, from, broadcast, pingId, err) {
+    st.tgt = p; st.tgtErr = err || ASSUMED_ERR_M; st.tgtFrom = from || null; st.activePing = pingId || null;
     update(true, from ? 'Squad target from ' + from + '. ' : '');
-    if (broadcast && !from) squad.sendTarget(p);
+    if (broadcast && !from) squad.sendTarget(p, st.tgtErr);
   }
 
   // ---------- pings: quick shared marks; click one to fire on it ----------
@@ -521,7 +615,7 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     renderPings(); draw();
   }
   function fireOnPing(pg) {
-    st.tgt = [pg.x, pg.y]; st.tgtFrom = null; st.activePing = pg.pid;
+    st.tgt = [pg.x, pg.y]; st.tgtErr = pg.e || ASSUMED_ERR_M; st.tgtFrom = null; st.activePing = pg.pid;
     update(true, 'Ping ' + pg.n + '. ');
   }
   function pingAt(sx, sy) {
@@ -534,8 +628,10 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     return best;
   }
   function pingSummary(pg) {
-    const r = solveFor([pg.x, pg.y]);
-    if (!r) return 'place your gun for numbers';
+    const r = solveFor([pg.x, pg.y], pg.e);
+    if (!r) return 'place your ' + posWord() + ' for numbers';
+    if (r.status === 'ok' && st.role === 'sniper') return '<b>' + fmtAz(r.az) + '°  zero ' + r.zero + '</b> · ' + Math.round(r.dist) + ' m';
+    if (r.status === 'ok' && st.role === 'spotter') return '<b>' + fmtAz(r.az) + '°  ' + Math.round(r.dist) + ' m</b>';
     if (r.status === 'ok') return '<b>' + fmtAz(r.az) + '°  ' + r.mils + ' mil</b> · ' + Math.round(r.dist) + ' m';
     return (r.status === 'far' ? 'out of range' : 'too close') + ' · ' + Math.round(r.dist) + ' m';
   }
@@ -555,7 +651,8 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       const who = document.createElement('span'); who.textContent = (pg.mine ? 'You' : pg.by) + ' · ';
       const nums = document.createElement('span'); nums.innerHTML = pingSummary(pg);
       info.append(who, nums);
-      const btn = document.createElement('button'); btn.textContent = st.activePing === pg.pid ? 'Firing' : 'Fire';
+      const btn = document.createElement('button');
+      btn.textContent = isGun() ? (st.activePing === pg.pid ? 'Firing' : 'Fire') : (st.activePing === pg.pid ? 'Showing' : 'Show');
       btn.onclick = () => fireOnPing(pg);
       li.append(tag, info, btn); ul.appendChild(li);
     });
@@ -617,14 +714,15 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     const p = toGame(sx, sy);
     if (!inMap(p, MAPS[st.map])) return;
     if (st.mode === 'gun' && !st.locked) {
-      st.gun = p; store.set('gun.' + st.map, p);
+      st.gun = p; st.gunErr = clickErr(); st.staleGun = false;
+      store.set('gun.' + st.map, p); store.set('gunErr.' + st.map, st.gunErr);
       setLocked(true); setMode('tgt');
       update(false);
-      say('Gun placed.');
+      say(isGun() ? 'Gun placed.' : 'Position placed.');
     } else {
       const hit = pingAt(sx, sy);
       if (hit) { fireOnPing(hit); return; }
-      const pg = { pid: squad.id + '-' + Date.now().toString(36), map: st.map, x: p[0], y: p[1], by: 'You', mine: true };
+      const pg = { pid: squad.id + '-' + Date.now().toString(36), map: st.map, x: p[0], y: p[1], e: clickErr(), by: 'You', mine: true };
       addPing(pg);
       squad.sendPing(pg);
     }
@@ -671,12 +769,14 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       const x = Number(msg.x), y = Number(msg.y);
       if (!m || !Number.isFinite(x) || !Number.isFinite(y) || !inMap([x, y], m)) return;
       const from = cleanName(msg.by) || 'Squadmate';
+      const e = Number(msg.e);
+      const err = Number.isFinite(e) && e > 0 && e < 500 ? e : ASSUMED_ERR_M;
       if (isPing) {
         if (typeof msg.pid !== 'string') return;
-        const pg = addPing({ pid: msg.pid.slice(0, 40), map: msg.map, x, y, by: from, mine: false });
+        const pg = addPing({ pid: msg.pid.slice(0, 40), map: msg.map, x, y, e: err, by: from, mine: false });
         showMembers();
         if (pg && msg.map === st.map) {
-          const r = solveFor([x, y]);
+          const r = solveFor([x, y], err);
           say('Ping ' + pg.n + ' from ' + from + (r ? ', ' + Math.round(r.dist / 10) * 10 + ' meters.' : '.'));
         }
         return;
@@ -685,7 +785,7 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
         $('from').textContent = from + ' marked a target on ' + m.name + '. Switch map to use it.';
         return;
       }
-      setTarget([x, y], from, false);
+      setTarget([x, y], from, false, null, err);
       showMembers();
     }
     function join(code) {
@@ -739,25 +839,27 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     return {
       join,
       id: myId,
-      sendPing(pg) { if ($('shareMine').checked) publish('ping', { pid: pg.pid, map: pg.map, x: +pg.x.toFixed(3), y: +pg.y.toFixed(3), by: callsign() }); },
+      sendPing(pg) { if ($('shareMine').checked) publish('ping', { pid: pg.pid, map: pg.map, x: +pg.x.toFixed(3), y: +pg.y.toFixed(3), e: +pg.e.toFixed(1), by: callsign() }); },
       sendUnping(pid) { publish('unping', { pid }); },
-      sendTarget(p) { if ($('shareMine').checked) publish('target', { map: st.map, x: +p[0].toFixed(3), y: +p[1].toFixed(3), by: callsign() }); },
+      sendTarget(p, e) { if ($('shareMine').checked) publish('target', { map: st.map, x: +p[0].toFixed(3), y: +p[1].toFixed(3), e: +e.toFixed(1), by: callsign() }); },
       initialRoom() { return cleanCode(new URLSearchParams(location.search).get('room')) || cleanCode(store.get('room', '')); },
     };
   })();
 
   // ---------- boot ----------
   buildSeg($('mapSel'), MAPS, st.map, pickMap);
-  buildSeg($('wpnSel'), WEAPONS, st.weapon, pickWeapon);
+  buildSeg($('roleSel'), ROLES, st.role, pickRole);
+  buildSeg($('scopeSel'), SCOPES, String(st.scopeMax), pickScope);
   window.addEventListener('resize', resize);
   resize();
-  loadMapState();
+  loadMapState(true);
+  setLabels();
   if (!st.gun) {
     // worked example on first visit so the page is not empty
     const s = MAPS[st.map].start;
     st.gun = [s[0] - 2.2, s[1] - 1.6]; st.tgt = [s[0], s[1]];
     setLocked(false); setMode('gun');
-    $('hint').textContent = 'Example shown. Click "Place gun", then click where your mortar is. Drag to move, scroll or pinch to zoom.';
+    $('hint').textContent = 'Example shown. Click "' + $('modeGun').textContent + '", then click where you are. Zoom in close first for a sharp direction. Drag to move, scroll or pinch to zoom.';
   }
   update(false);
   const r0 = squad.initialRoom();
