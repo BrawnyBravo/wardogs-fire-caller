@@ -9,7 +9,7 @@ A fan-made mortar and artillery helper for WARDOGS that **reads the firing solut
 - Pick your **role**: Spotter, Mortar (L81), SPH-2 or Sniper.
 - Place your gun (or yourself) once. Then click the map to drop a **ping**, and click a ping (on the map or in the list) to get its numbers. The page shows and speaks them:
   - Mortar and SPH-2: direction and elevation, for example "Ping 2. Turn to 54. Set 700."
-  - Sniper: direction, range and the scope zero to dial (zero moves in 100 m steps), with a hold high or low when the target sits between steps, for example "Turn to 41. 570 meters. Zero 600, hold a touch low." Choose your scope's longest zero so targets past it tell you to hold high.
+  - Sniper: direction, range, the scope zero to dial (zero moves in 100 m steps) and where to put the crosshair on the target: "aim center chest", "aim at the head", "aim 0.4 m above the head", and so on. If your scope has hold marks, it also names the mark, for example "put the target on mark 2 below the crosshair". Pick your rifle (bullet speeds from community tools that read the game files) and your scope's marks (mil or MOA). Past the rifle's longest zero it tells you how far to hold over; well past it, it says the shot is too far.
   - Spotter: bearing and range from you, to call out to the squad.
 - The ping list shows the numbers for every ping at a glance, so you can pick the closest or the one in range.
 - Works on Bakurani, Ozeti and Zestafona.
@@ -33,7 +33,7 @@ This page never connects to the game, reads its memory or screen, or presses key
 
 - No correction for height difference. Fire a ranging round when the target is well above or below you.
 - Direction is only as good as where you click. The page cannot know exactly where your gun stands; zoom in when placing it.
-- Sniper holds are a rough guide, not a ballistic table.
+- Sniper holds use gravity only (no air drag or wind), so at long range the real bullet drops a little more than shown. The size of one scope mark in game is not confirmed yet; the page assumes 1 mil or 1 MOA.
 - Accuracy depends on the community firing tables below. A game update that changes the weapons needs new tables.
 
 ## Credits

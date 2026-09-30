@@ -56,6 +56,12 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
 .status { grid-column: 1 / -1; font-weight: 600; font-size: 14px; padding: 6px 10px; border-radius: 5px; background: #20251f; }
 .status.ok { color: var(--ok); } .status.bad { color: var(--bad); } .status.idle { color: var(--muted); }
 .from { grid-column: 1 / -1; font-size: 13px; color: var(--squad); min-height: 1em; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+select { width: 100%; font: 500 14px var(--f-body); color: var(--ink); background: #141813; border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.aim { grid-column: 1 / -1; font-family: var(--f-num); font-weight: 700; font-size: 24px; line-height: 1.15; color: var(--amber); }
+.aim:empty { display: none; }
+.aim small { display: block; font-family: var(--f-body); font-weight: 500; font-size: 13px; color: var(--muted); }
 .prec { grid-column: 1 / -1; font-size: 13px; color: var(--muted); }
 .prec:empty { display: none; }
 .prec.warn { color: var(--amber); }
@@ -117,9 +123,16 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       <span class="lab">Role</span>
       <div class="seg" id="roleSel" role="group" aria-label="Role"></div>
     </div>
-    <div id="scopeRow" hidden>
-      <span class="lab">Scope's longest zero (m)</span>
-      <div class="seg" id="scopeSel" role="group" aria-label="Scope's longest zero"></div>
+    <div id="scopeRow" class="stack" hidden>
+      <div class="pair">
+        <label><span class="lab">Rifle</span><select id="rifleSel"></select></label>
+        <label><span class="lab">Scope marks</span><select id="reticleSel"></select></label>
+      </div>
+      <div>
+        <span class="lab">Scope's longest zero (m)</span>
+        <div class="seg" id="scopeSel" role="group" aria-label="Scope's longest zero"></div>
+      </div>
+      <div class="meta" style="font-size:12px;color:var(--muted)">Holds assume you normally aim at the chest. Ignores wind and air drag, so past about 600 m aim a little higher than shown. Scope marks assume 1 mark = 1 mil (or 1 MOA); check at max zoom.</div>
     </div>
 
     <div class="readout" aria-live="polite">
@@ -127,6 +140,7 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       <div><div class="k" id="k2">Set</div><div class="v" id="mil">---<small>mil</small></div></div>
       <div class="wide"><span id="dist">Range —</span><span id="exact"></span></div>
       <div class="status idle" id="status">Place your gun, then a target.</div>
+      <div class="aim" id="aim"></div>
       <div class="prec" id="prec"></div>
       <div class="from" id="from"></div>
     </div>
@@ -201,6 +215,37 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
   };
   // Scope zero moves in 100 m clicks (Page Up / Page Down in game); the longest zero depends on rifle and scope.
   const SCOPES = { 400: { name: '400' }, 600: { name: '600' }, 800: { name: '800' }, 1000: { name: '1000' }, 1500: { name: '1500' } };
+  // v: bullet speed in m/s, as community tools read it from the game files (xgamingserver, clutchbase; Sep 2026).
+  // zmin/zmax: zero range the rifle allows (community guides; 1000 where unknown).
+  const RIFLES = {
+    svd:    { name: 'SVD', v: 800, zmin: 100, zmax: 1100 },
+    mosin:  { name: 'Mosin', v: 865, zmin: 200, zmax: 800 },
+    sks:    { name: 'SKS', v: 735, zmin: 100, zmax: 1000 },
+    fal:    { name: 'FAL', v: 840, zmin: 100, zmax: 600 },
+    ak74:   { name: 'AK-74', v: 880, zmin: 100, zmax: 1000 },
+    pkm:    { name: 'PKM', v: 825, zmin: 100, zmax: 1500 },
+    sv98:   { name: 'SV98', v: 830, zmin: 100, zmax: 1000 },
+    mk22:   { name: 'MK22', v: 894, zmin: 100, zmax: 1000 },
+    bmr308: { name: 'BMR-308', v: 880, zmin: 100, zmax: 1000 },
+    scout:  { name: 'Scout Rifle TD', v: 975, zmin: 100, zmax: 1000 },
+    amr50:  { name: 'AMR 50', v: 900, zmin: 100, zmax: 1000 },
+  };
+  // mil: how many milliradians one mark on the reticle covers (0 = no hold marks, body holds only)
+  const RETICLES = {
+    mrad: { name: 'Mil ticks', mil: 1 },
+    moa:  { name: 'MOA ticks', mil: 0.2909 },
+    none: { name: 'No marks', mil: 0 },
+  };
+  const G = 9.81;
+  // Where to put the crosshair on a standing man when you would normally aim at the chest.
+  // h: metres to hold above the chest (negative = below). Chest ~1.3 m up, head ~1.7 m, belt ~1.0 m, knees ~0.5 m.
+  const BODY = [
+    { upTo: -0.55, say: 'aim at the knees' },
+    { upTo: -0.15, say: 'aim at the belt' },
+    { upTo: 0.15, say: 'aim center chest' },
+    { upTo: 0.35, say: 'aim at the neck' },
+    { upTo: 0.55, say: 'aim at the head' },
+  ];
   // A click lands within a few screen pixels of where you meant; that slop is what bends the direction at short range.
   const CLICK_PX = 3, ASSUMED_ERR_M = 8, WARN_DEG = 2;
   const TILE_URL = (m, z, x, y) => `https://djzet.github.io/wardogs-maps/maps/${m}/tiles/zoom_${z}/${x}_${y}.webp`;
@@ -217,6 +262,8 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     map: store.get('map', 'bakurani'),
     role: store.get('role', store.get('weapon', 'mortar')),
     scopeMax: store.get('scopeMax', 1000),
+    rifle: store.get('rifle', 'svd'),
+    reticle: store.get('reticle', 'mrad'),
     mode: 'gun', locked: false, staleGun: false,
     gun: null, gunErr: ASSUMED_ERR_M, tgt: null, tgtErr: ASSUMED_ERR_M, tgtFrom: null,
     voice: false,
@@ -227,6 +274,8 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
   if (!MAPS[st.map]) st.map = 'bakurani';
   if (!ROLES[st.role]) st.role = 'mortar';
   if (!SCOPES[st.scopeMax]) st.scopeMax = 1000;
+  if (!RIFLES[st.rifle]) st.rifle = 'svd';
+  if (!RETICLES[st.reticle]) st.reticle = 'mrad';
   const role = () => ROLES[st.role];
   const isGun = () => role().pos === 'gun';
   const posWord = () => isGun() ? 'gun' : 'position';
@@ -298,13 +347,30 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     r.spread = off;
     return r;
   }
+  // Gravity-only bullet drop; the sight line crosses the bullet's path at the zero distance.
+  const drop = (d, v) => G * (d / v) * (d / v) / 2;
+  const half = (n) => { const r = Math.round(n * 2) / 2; return (Number.isInteger(r) ? String(r) : r.toFixed(1)); };
+  function sniperAim(dist) {
+    const rf = RIFLES[st.rifle], rt = RETICLES[st.reticle];
+    const zmax = Math.min(rf.zmax, st.scopeMax);
+    const zero = Math.max(rf.zmin, Math.min(zmax, Math.round(dist / 100) * 100));
+    const h = drop(dist, rf.v) - drop(zero, rf.v) * dist / zero; // metres to aim above the chest
+    const mil = dist > 0 ? h / dist * 1000 : 0;
+    const body = BODY.find((b) => h <= b.upTo);
+    const words = body ? body.say : 'aim ' + Math.max(0.1, h - 0.5).toFixed(1) + ' m above the head';
+    let marks = '';
+    if (rt.mil && Math.abs(mil) >= rt.mil * 0.4) {
+      const n = half(Math.abs(mil) / rt.mil);
+      marks = 'put the target on mark ' + n + (mil > 0 ? ' below' : ' above') + ' the crosshair';
+    }
+    return { zero, zmax, h, mil, words, marks, past: dist > zmax + 50 };
+  }
   function solveRole(dist, az) {
     if (st.role === 'spotter') return { status: 'ok', dist, az };
     if (st.role === 'sniper') {
-      const zero = Math.max(100, Math.min(st.scopeMax, Math.round(dist / 100) * 100));
-      const off = dist - zero;
-      const hold = off > 50 ? 'high' : off >= 30 ? 'a touch high' : off < -50 ? 'low' : off <= -30 ? 'a touch low' : '';
-      return { status: 'ok', dist, az, zero, hold };
+      const a = sniperAim(dist);
+      // beyond about 1.5x the longest zero the hold is metres above the head: call it out of reach
+      return Object.assign({ status: dist > a.zmax * 1.5 ? 'far' : 'ok', dist, az }, a);
     }
     const w = WEAPONS[role().weapon];
     if (dist < w.min) return { status: 'close', dist, az };
@@ -396,7 +462,7 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       ring(st.gun[0], st.gun[1], w.max, 'rgba(111,183,232,.85)');
       ring(st.gun[0], st.gun[1], w.min, 'rgba(239,107,90,.8)', [6, 5]);
     } else if (st.gun && st.role === 'sniper') {
-      ring(st.gun[0], st.gun[1], st.scopeMax, 'rgba(111,183,232,.85)', [6, 5]);
+      ring(st.gun[0], st.gun[1], Math.min(RIFLES[st.rifle].zmax, st.scopeMax), 'rgba(111,183,232,.85)', [6, 5]);
     }
     const r = solve();
     if (st.gun && st.tgt) {
@@ -426,7 +492,7 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     if (st.role === 'sniper') {
       $('k2').textContent = 'Zero';
       $('mil').innerHTML = (ok ? r.zero : '---') + '<small>m</small>';
-      $('exact').textContent = ok && r.hold ? 'hold ' + r.hold : '';
+      $('exact').textContent = ok && Math.abs(r.mil) >= 0.05 ? 'hold ' + Math.abs(r.mil).toFixed(1) + ' mil ' + (r.mil > 0 ? 'high' : 'low') : '';
     } else if (st.role === 'spotter') {
       $('k2').textContent = 'Range';
       $('mil').innerHTML = (r ? Math.round(r.dist) : '---') + '<small>m</small>';
@@ -435,6 +501,12 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
       $('k2').textContent = 'Set';
       $('mil').innerHTML = (ok ? r.mils : '---') + '<small>mil</small>';
       $('exact').textContent = ok ? 'exact ' + Math.round(r.exact) + ' mil' : '';
+    }
+    const aim = $('aim');
+    aim.textContent = '';
+    if (ok && st.role === 'sniper') {
+      aim.textContent = r.words.charAt(0).toUpperCase() + r.words.slice(1);
+      if (r.marks) { const sm = document.createElement('small'); sm.textContent = 'Or ' + r.marks + '.'; aim.appendChild(sm); }
     }
     $('dist').textContent = r ? 'Range ' + Math.round(r.dist) + ' m' : 'Range —';
     $('from').textContent = st.tgtFrom ? 'Squad target from ' + st.tgtFrom : '';
@@ -450,10 +522,10 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     if (!st.gun) { s.className = 'status idle'; s.textContent = st.tgt ? 'Target received. Place your ' + posWord() + ' to get numbers.' : 'Place your ' + posWord() + ' first.'; }
     else if (st.staleGun) { s.className = 'status idle'; s.textContent = 'Your ' + posWord() + ' from last time is shown. Click where it is now, or press Ping to keep it.'; }
     else if (!st.tgt) { s.className = 'status idle'; s.textContent = 'Click the map to ping, then click a ping to ' + (isGun() ? 'fire on it.' : 'get its numbers.'); }
-    else if (ok && st.role === 'sniper') { s.className = 'status ok'; s.textContent = r.dist > st.scopeMax + 50 ? 'Past your longest zero. Hold high.' : 'Set zero ' + r.zero + ' m' + (r.hold ? ', hold ' + r.hold : '') + '.'; }
+    else if (ok && st.role === 'sniper') { s.className = 'status ok'; s.textContent = 'Set zero ' + r.zero + ' m' + (r.past ? ' (your longest), then hold high.' : '.'); }
     else if (ok && st.role === 'spotter') { s.className = 'status ok'; s.textContent = 'Bearing and range from you.'; }
     else if (ok) { s.className = 'status ok'; s.textContent = 'In range. Fire when ready.'; }
-    else if (r.status === 'far') { s.className = 'status bad'; s.textContent = 'Too far. ' + w.name + ' reaches ' + w.max + ' m.'; }
+    else if (r.status === 'far') { s.className = 'status bad'; s.textContent = w ? 'Too far. ' + w.name + ' reaches ' + w.max + ' m.' : 'Too far for a rifle shot. Get closer.'; }
     else { s.className = 'status bad'; s.textContent = 'Too close. ' + w.name + ' needs at least ' + w.min + ' m.'; }
     draw();
     renderPings();
@@ -465,7 +537,8 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     if (!r) return 'Place a target.';
     const dir = Math.round(r.az) % 360, m10 = Math.round(r.dist / 10) * 10;
     if (st.role === 'spotter') return 'Bearing ' + dir + '. ' + m10 + ' meters.';
-    if (st.role === 'sniper') return 'Turn to ' + dir + '. ' + m10 + ' meters. Zero ' + r.zero + (r.hold ? ', hold ' + r.hold : '') + '.';
+    if (st.role === 'sniper' && r.status === 'far') return 'Too far. ' + m10 + ' meters.';
+    if (st.role === 'sniper') return 'Turn to ' + dir + '. ' + m10 + ' meters. Zero ' + r.zero + '. ' + (Math.abs(r.h) > 0.55 && r.marks ? r.marks : r.words) + '.';
     if (r.status === 'far') return 'Out of range. ' + Math.round(r.dist) + ' meters.';
     if (r.status === 'close') return 'Too close. ' + Math.round(r.dist) + ' meters.';
     let t = 'Turn to ' + dir + '. Set ' + r.mils + '.';
@@ -558,6 +631,16 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
     setLabels();
     update(true);
   }
+  function buildSelect(el, items, current, onPick) {
+    el.innerHTML = '';
+    Object.entries(items).forEach(([id, it]) => {
+      const o = document.createElement('option'); o.value = id; o.textContent = it.name; o.selected = id === current;
+      el.appendChild(o);
+    });
+    el.onchange = () => onPick(el.value);
+  }
+  function pickRifle(id) { st.rifle = id; store.set('rifle', id); update(true); }
+  function pickReticle(id) { st.reticle = id; store.set('reticle', id); update(true); }
   function pickScope(id) {
     st.scopeMax = Number(id); store.set('scopeMax', st.scopeMax);
     buildSeg($('scopeSel'), SCOPES, String(id), pickScope);
@@ -630,7 +713,7 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
   function pingSummary(pg) {
     const r = solveFor([pg.x, pg.y], pg.e);
     if (!r) return 'place your ' + posWord() + ' for numbers';
-    if (r.status === 'ok' && st.role === 'sniper') return '<b>' + fmtAz(r.az) + '°  zero ' + r.zero + '</b> · ' + Math.round(r.dist) + ' m';
+    if (r.status === 'ok' && st.role === 'sniper') return '<b>' + fmtAz(r.az) + '°  zero ' + r.zero + '</b> · ' + Math.round(r.dist) + ' m · ' + r.words.replace(/^aim (at the )?/, '');
     if (r.status === 'ok' && st.role === 'spotter') return '<b>' + fmtAz(r.az) + '°  ' + Math.round(r.dist) + ' m</b>';
     if (r.status === 'ok') return '<b>' + fmtAz(r.az) + '°  ' + r.mils + ' mil</b> · ' + Math.round(r.dist) + ' m';
     return (r.status === 'far' ? 'out of range' : 'too close') + ' · ' + Math.round(r.dist) + ' m';
@@ -850,6 +933,8 @@ input[type=text] { min-width: 0; font: 500 14px var(--f-body); color: var(--ink)
   buildSeg($('mapSel'), MAPS, st.map, pickMap);
   buildSeg($('roleSel'), ROLES, st.role, pickRole);
   buildSeg($('scopeSel'), SCOPES, String(st.scopeMax), pickScope);
+  buildSelect($('rifleSel'), RIFLES, st.rifle, pickRifle);
+  buildSelect($('reticleSel'), RETICLES, st.reticle, pickReticle);
   window.addEventListener('resize', resize);
   resize();
   loadMapState(true);
