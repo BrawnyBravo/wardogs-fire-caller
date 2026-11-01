@@ -1,5 +1,6 @@
 # Automatic site-quality checks: accessibility and speed (Lighthouse, phone
-# settings) and broken links (lychee). Runs on pull requests, once a week, and
+# settings), broken links (lychee) and the outside services the page loads while
+# it runs (map pictures, squad-room broker). Runs on pull requests, once a week, and
 # by hand from the Actions tab. The pages are served from the checked-out files,
 # so a pull request is tested before it goes live.
 name: Site checks
@@ -96,4 +97,51 @@ jobs:
       # (in the job summary above): outside sites going down should not block a contribution.
       - name: Fail if links are broken
         if: github.event_name != 'pull_request' && steps.lychee.outputs.exit_code != '0'
+        run: exit 1
+
+  sources:
+    name: Outside sources (maps, squad rooms)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # The map pictures and the squad-room broker are addressed inside the page's
+      # script, so the link check skips them. This opens one of each the way the page does.
+      - name: Check map pictures, squad-room script and broker
+        id: sources
+        run: |
+          set +e
+          bash .github/scripts/check-sources.sh "$RUNNER_TEMP/sources-report.md"
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/sources-report.md" >> "$GITHUB_STEP_SUMMARY"
+      # Weekly run only: its own issue (not the broken-links one), so a clean link
+      # check never closes a sources problem or the other way round.
+      - name: Open, update or close the outside-sources issue
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCES_EXIT: ${{ steps.sources.outputs.exit_code }}
+          REPORT: ${{ runner.temp }}/sources-report.md
+        run: |
+          set -euo pipefail
+          gh label create outside-sources --color B60205 --description "Found by the weekly outside-sources check" --force
+          existing=$(gh issue list --label outside-sources --state open --limit 1 --json number --jq '.[0].number // empty')
+          if [ "$SOURCES_EXIT" = "0" ]; then
+            if [ -n "$existing" ]; then
+              gh issue close "$existing" --comment "Weekly check of $(date -u +%Y-%m-%d): maps and squad rooms work again."
+            fi
+            exit 0
+          fi
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --body-file "$REPORT"
+            gh issue comment "$existing" --body "Still failing on the weekly check of $(date -u +%Y-%m-%d). The report above is updated."
+          else
+            gh issue create --title "Maps or squad rooms down (weekly check)" --label outside-sources --body-file "$REPORT"
+          fi
+      # Same rule as links: weekly and manual runs go red, pull requests only report.
+      - name: Fail if a source is down
+        if: github.event_name != 'pull_request' && steps.sources.outputs.exit_code != '0'
         run: exit 1
