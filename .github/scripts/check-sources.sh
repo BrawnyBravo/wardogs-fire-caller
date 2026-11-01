@@ -17,7 +17,9 @@ check() { # name, url, expected status, actual status
   if [ "$4" = "$3" ]; then
     lines+=("- OK: $1 ($4)")
   else
-    lines+=("- FAILED: $1 - got ${4:-no answer}, expected $3 - <$2>")
+    local got="$4"
+    [ -z "$got" ] || [ "$got" = 000 ] && got="no answer"
+    lines+=("- FAILED: $1 - got $got, expected $3 - <$2>")
     failed=1
   fi
 }
@@ -27,8 +29,8 @@ status() { # url, extra curl args...
   curl -s -o /dev/null -m 20 --retry 2 --retry-delay 5 -w '%{http_code}' "$@" "$url" || true
 }
 
-# The broker keeps the connection open after agreeing (101), so curl stops at its
-# time limit; no retries here, or a working broker would take a minute to pass.
+# After agreeing (101) the broker may hold the connection open until curl's time
+# limit; no retries here, or a working broker could take a minute to pass.
 ws_status() { # url
   curl -s -o /dev/null -m 10 -w '%{http_code}' --http1.1 \
     -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
@@ -55,9 +57,7 @@ else
   check "squad-room script" "$script" 200 "$(status "$script" -L)"
   # A real browser opens the broker as a WebSocket; 101 means it agreed to switch.
   https_broker="https://${broker#wss://}"
-  check "squad-room broker" "$broker" 101 "$(status "$https_broker" --http1.1 \
-    -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
-    -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H 'Sec-WebSocket-Protocol: mqtt')"
+  check "squad-room broker" "$broker" 101 "$(ws_status "$https_broker")"
 fi
 
 {
