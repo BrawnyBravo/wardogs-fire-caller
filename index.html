@@ -261,6 +261,9 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
     set(k, v) { try { localStorage.setItem('wfc.' + k, JSON.stringify(v)); } catch (e) {} },
   };
 
+  // Only positions explicitly kept or placed during this visit are trusted.
+  const confirmedMaps = new Set();
+
   const st = {
     map: store.get('map', 'bakurani'),
     role: store.get('role', store.get('weapon', 'mortar')),
@@ -603,7 +606,7 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
     $('scopeRow').hidden = st.role !== 'sniper';
     setLocked(st.locked);
   }
-  function keepGun() { if (st.staleGun) { st.staleGun = false; setLocked(true); update(false); } }
+  function keepGun() { if (st.staleGun) { confirmedMaps.add(st.map); st.staleGun = false; setLocked(true); update(false); } }
   $('modeGun').onclick = () => { setLocked(false); setMode('gun'); };
   $('modeTgt').onclick = () => { setMode('tgt'); keepGun(); };
   $('lockBtn').onclick = () => { setLocked(!st.locked); if (st.locked) { setMode('tgt'); keepGun(); } };
@@ -618,12 +621,12 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
       el.appendChild(b);
     });
   }
-  // onOpen: a position remembered from an earlier visit is probably from another match, so ask before trusting it
-  function loadMapState(onOpen) {
+  // Saved positions need confirmation on every map until kept or placed this visit.
+  function loadMapState() {
     st.gun = store.get('gun.' + st.map, null);
     st.gunErr = store.get('gunErr.' + st.map, ASSUMED_ERR_M);
     st.tgt = null; st.tgtFrom = null; st.activePing = null;
-    st.staleGun = !!(onOpen && st.gun);
+    st.staleGun = !!st.gun && !confirmedMaps.has(st.map);
     setLocked(!!st.gun && !st.staleGun);
     setMode(st.gun && !st.staleGun ? 'tgt' : 'gun');
     const c = st.gun || MAPS[st.map].start;
@@ -810,6 +813,7 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
     if (!inMap(p, MAPS[st.map])) return;
     if (st.mode === 'gun' && !st.locked) {
       st.gun = p; st.gunErr = clickErr(); st.staleGun = false;
+      confirmedMaps.add(st.map);
       store.set('gun.' + st.map, p); store.set('gunErr.' + st.map, st.gunErr);
       setLocked(true); setMode('tgt');
       update(false);
@@ -949,7 +953,7 @@ select:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
   buildSelect($('reticleSel'), RETICLES, st.reticle, pickReticle);
   window.addEventListener('resize', resize);
   resize();
-  loadMapState(true);
+  loadMapState();
   setLabels();
   if (!st.gun) {
     // worked example on first visit so the page is not empty
